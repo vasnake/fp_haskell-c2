@@ -16,3 +16,5 @@ https://stepik.org/693
 ## links
 
 - Ninety-Nine Problems in Haskell https://stepik.org/course/101204/info
+- Pronunciation https://wiki.haskell.org/Pronunciation
+- hooogle https://hoogle.haskell.org/?hoogle=State&scope=set%3Ahaskell-platform
