@@ -18,3 +18,5 @@ https://stepik.org/693
 - Ninety-Nine Problems in Haskell https://stepik.org/course/101204/info
 - Pronunciation https://wiki.haskell.org/Pronunciation
 - hooogle https://hoogle.haskell.org/?hoogle=State&scope=set%3Ahaskell-platform
+- в Haskell для любого типа, для которого определен и выполняется первый закон функтора, выполняется и второй https://www.schoolofhaskell.com/user/edwardk/snippets/fmap
+- Theorems for free / Philip Wadler https://people.mpi-sws.org/~dreyer/tor/papers/wadler.pdf
