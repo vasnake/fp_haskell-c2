@@ -1,2 +1,3 @@
 module TestApplicative where
-import Prelude (fromInteger)
+import Prelude (show, read)
+import Text.Parsec (getParserState)

@@ -23,3 +23,5 @@ https://stepik.org/693
 - hooogle https://hoogle.haskell.org/?hoogle=State&scope=set%3Ahaskell-platform
 - в Haskell для любого типа, для которого определен и выполняется первый закон функтора, выполняется и второй https://www.schoolofhaskell.com/user/edwardk/snippets/fmap
 - Theorems for free / Philip Wadler https://people.mpi-sws.org/~dreyer/tor/papers/wadler.pdf
+- Real World Haskellby Bryan O'Sullivan, Don Stewart, and John Goerzen https://book.realworldhaskell.org/read/using-parsec.html
+- SKIing with Y*, Iota and Ackermann http://www.type.sh/?p=161

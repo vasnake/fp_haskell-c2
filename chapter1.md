@@ -1104,8 +1104,8 @@ exprEnv op =
 
 -- solution
 
--- нужно оставить оператор <??>, 
--- вместо него грейдер будет подставлять <**>, <*?> и сравнивать результаты. 
+-- нужно оставить оператор <??>
+-- вместо него грейдер будет подставлять <**>, <*?> и сравнивать результаты.
 -- Вам нужно лишь подобрать такие операнды, при которых результаты "вызова" будут различаться
 
 ```
@@ -1118,6 +1118,354 @@ https://stepik.org/lesson/42245/step/1?unit=20509
 - Parsec
 - Парсер комбинаторы
 - Аппликативный интерфейс Parsec
+
+### 1.3.2 Parsec, библиотека парсер-комбинаторов
+
+Хороший пример сервиса с аппликативным интерфейсом: парсер (синтаксический разборщик).
+На входе поток символов, на выходе некотарая структура, в соответствии с грамматикой.
+Или ошибка.
+Рассмотрим существующий парсер (либа парсер-комбинаторов).
+Сложные парсеры создаются из простых, есть готовый набор простых и тривиальных комбинаторов из этих простых.
+```hs
+import Text.Parsec
+import Control.Applicative ((*>), (<*))
+
+-- парсер `digit` возвращает символ-цифру или ошибку
+parseTest digit "12ab"
+'1'
+parseTest digit "ab21"
+error: unexpected "a"
+
+-- парсер `letter`
+parseTest letter "12ab"
+error
+parseTest letter "ab21"
+'a'
+
+parseTest -- это функция для вывода результата работы парсера на консоль (Monad IO)
+ghci> :i parseTest
+parseTest ::
+  (Stream s Data.Functor.Identity.Identity t, GHC.Show.Show a) =>
+  Parsec s () a -> s -> GHC.Types.IO () -- Defined in ‘Text.Parsec.Prim’
+-- разберем сигнатуру
+Parsec s () a -- первый параметр, парсер из потока s в некий a, стейт в виде юнита () игнорится
+s -- второй параметр, входная строка
+IO () -- выход, что-то напечатали на консоль
+
+-- есть функция для программной обработки результатов работы парсера, `parse`
+ghci> parse letter "" "ab21"
+Right 'a'
+
+ghci> parse letter "" "12ab"
+Left (line 1, column 1): unexpected "1" expecting letter
+
+ghci> :i parse
+parse ::
+  Stream s Data.Functor.Identity.Identity t =>
+  Parsec s () a -> SourceName -> s -> Data.Either.Either ParseError a -- Defined in ‘Text.Parsec.Prim’
+-- разберем сигнатуру
+Parsec s () a -- первый параметр, парсер из потока s в некий a, стейт в виде юнита () игнорится
+SourceName -- второй параметр, характеристика источника для трейсинга ошибок
+s -- третий параметр, входная строка
+Either ParseError a -- выход, ошибка или результат a
+
+-- функция создания парсера: `oneOf`
+vowel :: Parsec [Char] u Char
+vowel = oneOf "aeiou"
+
+ghci> parseTest vowel "abc"
+'a'
+ghci> parseTest vowel "bcd"
+parse error at (line 1, column 1): unexpected "b"
+
+Parsec -- трех-параметрический конструктор типов
+Parsec [Char] u Char
+[Char] -- тип входного потока
+u -- определяемое пользователем состояние, поддержка стейта парсера
+Char -- тип выходного значения
+
+-- n.b. все параметризовано, можно парсить что угодно
+-- на входе могут быть токены (после лексера) или другие типы
+```
+repl
+
+```hs
+ghci> :browse Text.Parsec.Char
+alphaNum ::
+  Stream s m GHC.Types.Char => ParsecT s u m GHC.Types.Char
+anyChar ::
+  Stream s m GHC.Types.Char => ParsecT s u m GHC.Types.Char
+char ::
+  Stream s m GHC.Types.Char =>
+  GHC.Types.Char -> ParsecT s u m GHC.Types.Char
+...
+```
+extra
+
+```hs
+https://stepik.org/lesson/42245/step/3?unit=20509
+TODO
+{--
+Какие из следующих примитивных парсеров имеются в библиотеке `Text.Parsec.Char`
+
+Select all correct options from the list
+
+- Парсер, разбирающий в точности символ новой строки ('\n')
+- Парсер, разбирающий в точности символ пробела (' ')
+- Парсер, разбирающий в точности последовательность символов возврата каретки ('\r') и новой строки ('\n')
+- Парсер, разбирающий произвольный символ
+- Парсер, разбирающий в точности символ возврата каретки ('\r')
+- Парсер, разбирающий в точности символ табуляции ('\t')
+--}
+
+-- solution
+
+```
+test
+
+### 1.3.4 парсер-комбинаторы Parsec (many, count, endBy)
+
+В предыдущей главе посмотрели на примитивные парсеры.
+Теперь посмотрим на комбинаторы.
+```hs
+-- many1: один или большее число раз
+ghci> parseTest (many1 digit) "123abc"
+"123"
+ghci> parseTest (many1 digit) "d123abc"
+parse error at (line 1, column 1): unexpected "d" expecting digit
+
+ghci> :i many1
+many1 :: Stream s m t => ParsecT s u m a -> ParsecT s u m [a] -- Defined in ‘Text.Parsec.Combinator’
+-- один или большее число раз: применяет парсер из параметра, до получения ошибки
+-- трансформация парсера-выдающего-одно-значение в парсер-выдающий-список
+
+-- для случая 0 или более раз: парсер-комбинатор `many`
+ghci> parseTest (many digit) "d123abc"
+"" -- 0 успешных результатов это тоже успех для данного комбинатора
+ghci> parseTest (many digit) "123abc"
+"123"
+
+-- count: строго заданное количество раз успешно отработавший парсер из параметра
+ghci> parseTest (count 3 digit) "123abc"
+"123"
+ghci> parseTest (count 2 digit) "123abc"
+"12"
+ghci> parseTest (count 4 digit) "123abc"
+parse error at (line 1, column 4): unexpected "a" expecting digit
+
+ghci> :i count
+count ::
+  Stream s m t =>
+  GHC.Types.Int -> ParsecT s u m a -> ParsecT s u m [a] -- Defined in ‘Text.Parsec.Combinator’
+
+-- endBy: первый парсер, после которого выполняется второй парсер
+ghci> parseTest (count 3 digit `endBy` (char 'b')) "123bc"
+["123"]
+ghci> parseTest (count 3 digit `endBy` (char 'b')) "123b456b"
+["123","456"]
+ghci> parseTest (count 3 digit `endBy` (char 'b')) "123abc"
+parse error at (line 1, column 4): unexpected "a" expecting "b"
+
+ghci> :i endBy
+endBy ::
+  Stream s m t =>
+  ParsecT s u m a -> ParsecT s u m sep -> ParsecT s u m [a] -- Defined in ‘Text.Parsec.Combinator’
+```
+repl
+
+```hs
+https://stepik.org/lesson/42245/step/5?unit=20509
+TODO
+{--
+Реализуйте парсер `getList`, который разбирает строки из чисел, разделенных точкой с запятой,
+и возвращает список строк, представляющих собой эти числа:
+
+GHCi> parseTest getList "1;234;56"
+["1","234","56"]
+
+GHCi> parseTest getList "1;234;56;"
+parse error at (line 1, column 10):
+unexpected end of input
+expecting digit
+
+GHCi> parseTest getList "1;;234;56"
+parse error at (line 1, column 3):
+unexpected ";"
+expecting digit
+
+Совет: изучите парсер-комбинаторы, доступные в модуле `Text.Parsec`, и постарайтесь найти наиболее компактное решение.
+--}
+import Text.Parsec
+getList :: Parsec String u [String]
+getList = undefined
+
+-- solution
+https://hackage.haskell.org/package/parsec-3.1.11/docs/Text-ParserCombinators-Parsec-Combinator.html
+
+```
+test
+
+### 1.3.6 семантика аппликатива Parsec (`pure, <*>`)
+
+Семантика аппликативного функтора для Parsec.
+Что значит `pure`, `applied over`?
+
+`pure` игнорирует первые параметры конструктора Parsec и возвращает переданное значение, завернутое в конструктор Parsec.
+
+`applied over` соединяет два парсера, где первый откусывает от входа свою часть, второй работает уже с хвостом входа;
+результаты обоих обрабатывается поднятой-в-аппликатив-функцией.
+Если где-то в цепочке вылезла ошибка, весь пайплайн выдает эту ошибку.
+```hs
+-- pure: посмотрим на него
+ghci> import Control.Applicative
+ghci> parseTest (pure 42) "foo"
+42
+-- что завернули в Parsec, то и вернули: 42
+
+-- applied over
+
+-- возьмем пример пайплайна, построенного на аппликативе
+-- парсер выдает пару из собранных в цепочку парсеров
+p0 :: Parsec [Char] u ([Char], [Char])
+p0 = pure (,) <*> many1 letter <*> many1 digit
+p0 = (,) <$> many1 letter <*> many1 digit -- более традиционная запись, конструктор пары fmap парсер буков ...
+-- слева-направо: функция двух аргументов (конструктор пары) поднимается в аппликатив,
+-- первым аргументом для пары будет 1.. буков, вторым аргументом будет 1.. цифр
+
+ghci> parseTest p0 "abc123"
+("abc","123")
+
+-- пример пайплайна, первый результат игнорируется
+ghci> import Text.Parsec as TP
+ghci> parseTest (string "abc" *> TP.many digit) "abc123"
+"123"
+-- комбинация через правую ап, парсит первый парсер, игнорит его, парсит второй.
+
+-- чуть сложнее, пара из первого парсера и цепочки из второго-и-третьего
+-- результат второго игнорируется
+p1 :: Parsec [Char] u ([Char], [Char])
+p1 = (,) <$> many1 letter <*> (many space *> many1 digit)
+ -- игнорим пробелы 0..
+ghci> parseTest p1 "abc123"
+("abc","123")
+ghci> parseTest p1 "abc 123"
+("abc","123")
+
+-- тот же эффект, другая запись (левая ассоциативность тут играет)
+p1 = (,) <$> many1 letter <* many space <*> many1 digit
+-- 1.. буков и следом 0.. пробелов с игнором второго результата. Второй элемент пары 1.. цифр
+
+ghci> parseTest p1 "abc  123"
+("abc","123")
+```
+repl
+
+```hs
+https://stepik.org/lesson/42245/step/7?unit=20509
+TODO
+{--
+Используя аппликативный интерфейс `Parsec`, реализуйте функцию `ignoreBraces`
+которая принимает три аргумента-парсера. 
+Первый парсер разбирает текст, интерпретируемый как открывающая скобка, 
+второй — как закрывающая, 
+а третий разбирает весь входной поток, расположенный между этими скобками
+Возвращаемый парсер возвращает результат работы третьего парсера, скобки игнорируются
+
+GHCi> test = ignoreBraces (string "[[") (string "]]") (many1 letter)
+GHCi> parseTest test "[[ABC]]DEF"
+"ABC"
+--}
+import Text.Parsec
+ignoreBraces :: Parsec [Char] u a -> Parsec [Char] u b -> Parsec [Char] u c -> Parsec [Char] u c
+ignoreBraces = undefined
+
+-- solution
+
+```
+test
+
+## chapter 1.4, Аппликативный парсер своими руками
+
+https://stepik.org/lesson/30425/step/1?unit=11042
+
+- Выбор типа для парсера
+- Интерфейс функтора для парсера 
+- Аппликативный интерфейс для парсера
+- Реализация примитивных парсеров
+- Класс типов Alternative
+- Парсер с выбором альтернатив
+- Рекурсия при синтаксическом разборе
+
+### 1.4.2 тип парсера Parser
+
+Начинаем сооружать парсер с аппликативным интерфейсом.
+Проведем некоторые рассуждения на тему, какой тип нам нужен, исходя из желаемой функциональности.
+```hs
+import Data.Char
+import Control.Applicative hiding (many)
+
+-- тип парсера: строка в произвольную структуру
+type Parser a = String -> a
+-- стрелочный тип (аппликатив: композиция функций)
+
+-- такой парсер уже есть:
+ghci> :i read
+read :: GHC.Read.Read a => GHC.Base.String -> a -- Defined in ‘Text.Read’
+
+ghci> read "42" :: Int
+42
+-- есть проблема: что-то сложнее примитивов так распарсить не получается
+ghci> read "14*3" :: Int
+*** Exception: Prelude.read: no parse
+
+-- надо поддержать более сложные варианты, как?
+-- нужна поддержка состояния, стейта, где будет лежать еще не распарсенный хвост ввода
+type Parser a = String -> (a, String)
+
+-- теперь надо подумать о возможных ошибках, если парсер не может распарсить вход
+type Parser a = String -> Maybe (a, String)
+
+-- опция Maybe не дает возможности показывать осмысленные ошибки,
+-- Either дает
+type Parser a = String -> Either String (a, String)
+
+-- далее: а как быть в случаях, когда разбор можно выполнить несколькими способами?
+-- если валидных вариантов выхода из парсера 1..
+-- неоднозначные грамматики
+type Parser a = String -> [(a, String)]
+-- пустой список: не удалось распарсить (текст ошибки потеряли)
+-- 1.. варианты годного результата
+
+-- такой парсер тоже есть
+ghci> :i reads
+reads :: Read a => ReadS a      -- Defined in ‘Text.Read’
+ghci> :i ReadS
+type ReadS :: * -> *
+type ReadS a = String -> [(a, String)] -- Defined in ‘Text.ParserCombinators.ReadP’
+
+ghci> reads "14*3" :: [(Int,String)]
+[(14,"*3")]
+
+-- увы, тут тоже не без проблем
+ghci> reads "*3" :: [(Int,String)]
+[]
+-- облом парсинга числа из звездочки ломает потенциальный пайплайн
+-- хотелось бы некие комбинаторы ...
+-- для этого нужно аппликативный интерфейс (чтобы соединять парсеры в цепочки)
+-- для этого нужно правильно задать тип
+
+-- data ... or
+newtype Parser a = Parser { apply :: String -> [(a, String)] }
+-- not `type`
+
+ghci> :t apply
+apply :: Parser a -> String -> [(a, String)] -- взять парсер, строку, вернуть список пар (значение, остаток-входа)
+
+-- вспомогательная функция
+parse :: Parser a -> String -> a -- первый результат парсинга
+parse p = (fst . head . apply) p
+```
+repl
 
 
 
