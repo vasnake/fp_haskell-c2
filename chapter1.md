@@ -1723,10 +1723,16 @@ test
 
 ### 1.4.10 type-class Alternative
 
-https://wiki.haskell.org/Typeclassopedia#Failure_and_choice:_Alternative.2C_MonadPlus.2C_ArrowPlus
+https://hackage.haskell.org/package/base-4.19.0.0/docs/Control-Applicative.html#g:2
 
-Альтернатив это производная от Аппликатив.
+Альтернатив это производная от Аппликатив, его расширение.
 Добавляет к аппликативному функтору некую моноидальную структуру (нейтраль и суммирование).
+
+В некотором роде, альтернатив похож на моноид суммы,
+если сравнивать аппликатив с моноидом произведения.
+
+Моноид не подходит по причине несовпадения требуемых kind.
+Альтернатив это тайп-класс более высокого кайнда.
 ```hs
 -- освежим память, что такое моноид
 
@@ -1737,34 +1743,37 @@ class Monoid a where
 -- тип "а" имеет значение, должен быть моноидом
 instance (Monoid a) => Monoid (Maybe a) where -- если а моноид, можно сделать моноидальный мэйби
     mempty = Nothing
-    Nothing `mappend` m = m
+    Nothing `mappend` m = m 
     m `mappend` Nothing = m
     (Just m1) `mappend` (Just m2) = Just (m1 `mappend` m2)
+-- реализация прячет Nothing и склеивает (моноид) значения
 
--- альтернативная реализация
-
+-- альтернативная реализация, прокидывает первое (левое) не-пустое значение, склейка невозможна (нет контекста моноид)
+-- альтернативная реализация упакована в ньютайп, во избежание конфликта имен
+newtype First a = First { getFirst :: Maybe a }
+-- по сути это вот это:
 -- тип "а" не важен, двигаем на выход первый не-пустой
 instance Monoid (Maybe a) where
     mempty = Nothing
     Nothing `mappend` m = m
     m `mappend` _ = m
 
--- альтернативная реализация упакована в ньютайп, во избежание конфликта имен
-newtype First a = First { getFirst :: Maybe a }
+-- посмотрим на Alternative: A monoid on applicative functors
 
--- посмотрим на Alternative
--- у него другой (от моноида) kind, ему нужен конструктор типов;
+-- у него другой (отличный от моноида) kind, ему нужен конструктор типов;
 -- у него больше законов.
 
--- моноидальные свойства завернутые в контекст.
+-- моноидальные свойства контекста
 infixl 3 <|> -- более низкий приоритет (от <*>, <$>, ...)
 class (Applicative f) => Alternative f where -- расширим аппликатив
-    empty :: f a -- нейтраль, похоже на моноидальный mempty, но это "а завернутое в контекст", что как-бы `pure`
+    empty :: f a -- нейтраль, похоже на моноидальный mempty, но это "нейтральный контекст", без конкретного значения
     (<|>) :: f a -> f a -> f a -- ассоциативная операция, сигнатура как моноид mappend, не так ли? нет, но похоже. Здесь это "а в контексте".
+-- empty: the identity of `<|>`
+-- <|>: associative binary operation
 
 instance Alternative [] where -- реализация альтернативы для списка
     empty = []
-    (<|>) = (++)
+    (<|>) = (++) -- список позволяет комбинировать: склеить два списка
 -- альтернатива для списка повторяет поведение моноида для списка
 
 ghci> "abc" <|> "def"
@@ -1774,20 +1783,27 @@ ghci> "abc" <|> "def"
 ghci> const <$> "abc" <*> "def"
 "aaabbbccc" -- 3*3 = 9
 
+-- альтернатива для мейби это вот та самая другая реализация моноида: из цепочки выходит первый не-пустой
 instance Alternative Maybe where -- наложить ограничение на `a` мы не можем, класс не позволяет добавить параметр `a`
     empty = Nothing
     Nothing <|> r = r
     l <|> _ = l
 -- без ограничений на `a` это единственная разумная реализация (First)
--- первый не-пустой
+-- первый не-пустой, органично ложится на тип-суммы из двух конструкторов
 ghci> Nothing <|> Just 3 <|> Just 5 <|> Nothing
 Just 3
 
--- К трем законам моноида добавляются еще четыре
+-- Законы Alternative
 
--- №1 правая дистрибутивность <*>
+--Для Alternative, к трем законам моноида:
+mempty `mappend` x          = x                             -- #1 left empty
+x `mappend` mempty          = x                             -- #2 right empty
+(x `mappend` y) `mappend` z = x `mappend` (y `mappend` z)   -- #3 append associativity
+--добавляются еще четыре:
+
+-- №1 правая дистрибутивность ap <*>
 (f <|> g) <*> a = (f <*> a) <|> (g <*> a) -- like (f + g) * a
--- №2 right absorbtion <*>
+-- №2 right absorbtion ap <*>
 empty <*> a = empty -- like 0 * x
 -- #1, #2 описывают связь между аппликативом и альтернативом
 
@@ -1798,6 +1814,218 @@ f <$> (a <|> b) = (f <$> a) <|> (f <$> b)
 f <$> empty = empty
 ```
 repl
+
+### 1.4.11 Alternative Parser
+
+Почему альтернатив это не моноид?
+
+> `MonoidK` — это моноид для конструкторов типов вида `* -> *`, без всяких ограничений на applicative, т.е. alternative без applicative.
+- https://typelevel.org/cats/typeclasses/monoidk.html
+- https://typelevel.org/cats/typeclasses/semigroupk.html
+
+Резюмируя:
+- у моноида сложение зависит от типа, хранящегося в контейнере
+- у MonoidK сложение не зависит от типа в контейнере
+
+Семантика applied over `<*>` в парсере: применить левый парсер к входной строке, на хвосте применить правый парсер;
+левую функцию применить к результату правого парсера.
+
+Хотим в наш Parser добавить семантику "альтернативы".
+Семантика alternative `<|>` в парсере: применить левый, если успешно, то это и есть результат;
+иначе применить правый и вернуть его результат.
+
+```hs
+instance Alternative Parser where
+    empty :: Parser a
+    empty = Parser f where -- парсер это функция, стрелка
+        f _ = [] -- результат работы парсера это список пар
+    (<|>) :: Parser a -> Parser a -> Parser a
+    p <|> q = Parser f where -- левый или правый-если-левый-сломан
+        f s = let ps = apply p s in -- применим левый парсер
+        if null ps -- и проверим результат
+            then apply q s
+            else ps
+
+-- хотим получить А или В
+ghci> apply (char 'A' <|> char 'B') "ABC"
+[('A',"BC")]
+ghci> apply (char 'A' <|> char 'B') "BC"
+[('B',"C")]
+ghci> apply (char 'A' <|> char 'B') "C"
+[]
+
+```
+repl
+
+morse
+```hs
+GHCi> parse (some $ morse) "..-"
+["EET","EA","IT","U"]
+
+morse :: Parser Char
+morse = Parser f1 <|> Parser f2 <|> Parser f3 where
+    f1 ('.':cs) = [('E',cs)]
+    f1 ('-':cs) = [('T',cs)]
+    f1 _ = []
+
+    f2 ('.':'-':cs) = [('A',cs)]
+    f2 ('.':'.':cs) = [('I',cs)]
+    f2 ('-':'.':cs) = [('N',cs)]
+    f2 ('-':'-':cs) = [('M',cs)]
+    f2 _ = []
+
+    f3 ('.':'.':'-':cs) = [('U',cs)]
+    -- etc
+    f3 _ = []
+```
+extra
+
+```hs
+https://stepik.org/lesson/30425/step/12?unit=11042
+TODO
+{--
+Сделайте парсер `Prs` представителем класса типов `Alternative`
+с естественной для парсера семантикой
+
+newtype Prs a = Prs { runPrs :: String -> Maybe (a, String) }
+
+GHCi> runPrs (char 'A' <|> char 'B') "ABC"
+Just ('A',"BC")
+GHCi> runPrs (char 'A' <|> char 'B') "BCD"
+Just ('B',"CD")
+GHCi> runPrs (char 'A' <|> char 'B') "CDE"
+Nothing
+
+Представители для классов типов `Functor` и `Applicative` уже реализованы.
+Функцию 
+char :: Char -> Prs Char
+включать в решение не нужно, но полезно реализовать для локального тестирования.
+--}
+instance Alternative Prs where
+  empty = undefined
+  (<|>) = undefined
+
+-- solution
+import Control.Applicative
+
+```
+test
+
+### 1.4.13 parser lowers, many
+
+Класс парсеров: переваривать голову строки (списка) в цикле. `0..` буков как результат парсинга.
+Полезно для пропуска пробельных символов.
+
+Создадим парсер выборки символов в нижнем регистре.
+```hs
+-- первая попытка, рекурсивное использование парсера одной буквы
+lowers :: Parser String
+lowers = (pure (:)) <*> lower <*> lowers -- рекурсивное построение списка
+
+ghci> apply lower "abc"
+[('a',"bc")]
+ghci> apply lower "Abc"
+[]
+
+-- увы, не работает. Почему? Аппликатив убивает весь результат при встрече неудачи
+ghci> apply lowers "abCdef"
+[]
+ghci> apply lowers "abcdef"
+[]
+
+-- вторая попытка
+
+-- добавим альтернативу, которая вместо обнуления всего при неудаче,
+-- даст удачное терминирование рекурсии с сохранением накопленного результата
+lowers = (pure (:)) <*> lower <*> lowers <|> (pure "")
+-- работает как ожидаем
+ghci> apply lowers "abcdef"
+[("abcdef","")]
+ghci> apply lowers "abCdef"
+[("ab","Cdef")]
+ghci> apply lowers "AbCdef"
+[("","AbCdef")]
+
+-- обобщение паттерна
+
+many :: Parser a -> Parser [a]
+many p = (:) <$> p <*> (many p) <|> (pure [])
+-- n.b. аппликативный функтор и моноидальный альтернатив используются без привязки к типу значения,
+-- how cool is that!
+
+ghci> apply (many digit) "123abc"
+[([1,2,3],"abc")]
+
+-- парсер many всегда успешен, неудач у него не бывает.
+ghci> apply (many digit) "abc"
+[([],"abc")] -- удачное завершение парсера, с пустым результатом
+ghci> apply (digit) "abc"
+[] -- неудачное завершение парсера
+
+```
+repl
+
+```hs
+https://stepik.org/lesson/30425/step/14?unit=11042
+TODO
+{--
+Реализуйте для парсера `Prs` парсер-комбинатор `many1`
+
+newtype Prs a = Prs { runPrs :: String -> Maybe (a, String) }
+many1 :: Prs a -> Prs [a]
+
+который отличается от `many` только тем, что он терпит неудачу в случае,
+когда парсер-аргумент неудачен на начале входной строки
+
+> runPrs (many1 $ char 'A') "AAABCDE"
+Just ("AAA","BCDE")
+> runPrs (many1 $ char 'A') "BCDE"
+Nothing
+
+Функцию `char :: Char -> Prs Char` включать в решение не нужно, но полезно реализовать для локального тестирования
+--}
+many1 :: Prs a -> Prs [a]
+many1 = undefined
+
+-- solution
+
+```
+test
+
+```hs
+https://stepik.org/lesson/30425/step/15?unit=11042
+TODO
+{--
+nat :: Prs Int
+mult :: Prs Int
+mult = (*) <$> nat <* char '*' <*> nat
+
+Реализуйте парсер `nat` для натуральных чисел,
+так чтобы парсер `mult` обладал таким поведением
+
+GHCi> runPrs mult "14*3"
+Just (42,"")
+GHCi> runPrs mult "64*32"
+Just (2048,"")
+GHCi> runPrs mult "77*0"
+Just (0,"")
+GHCi> runPrs mult "2*77AAA"
+Just (154,"AAA")
+
+Реализацию функции 
+char :: Char -> Prs Char 
+следует включить в присылаемое решение, только если она нужна для реализации парсера `nat`
+--}
+nat :: Prs Int
+nat = undefined
+
+-- solution
+-- от студента нужен только работающий nat, а mult и char мы в тестирующей части используем свои
+
+```
+test
+
+## chapter 1.5, Композиция на уровне типов
 
 
 

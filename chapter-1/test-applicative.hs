@@ -1,5 +1,5 @@
 module TestApplicative where
-import Prelude (show, read, String, Char, Functor, fmap, Bool, otherwise, Int, (==), (*), id, const, Maybe (..))
+import Prelude (show, read, String, Char, Functor, fmap, Bool, otherwise, Int, (==), (*), id, const, Maybe (..), null)
 import Text.Parsec (getParserState)
 import Data.Char
 import Control.Applicative hiding (many)
@@ -60,3 +60,16 @@ multiplication :: Parser Int
 multiplication = (*) <$> digit <* char '*' <*> digit -- умножить две цифры, разделенные *, сама звезда игнор.
 
 test3 = Nothing <|> Just 3 <|> Just 5 <|> Nothing
+
+instance Alternative Parser where
+    empty :: Parser a
+    empty = Parser f where -- парсер это функция, стрелка
+        f _ = [] -- результат работы парсера это список пар
+    (<|>) :: Parser a -> Parser a -> Parser a
+    p <|> q = Parser f where -- левый или правый-если-левый-сломан
+        f s = let ps = apply p s in -- применим левый парсер
+            if null ps -- и проверим результат
+                then apply q s
+                else ps
+
+test4 = apply (char 'A' <|> char 'B') "ABC"
