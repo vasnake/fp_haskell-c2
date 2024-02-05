@@ -2027,6 +2027,387 @@ test
 
 ## chapter 1.5, Композиция на уровне типов
 
+https://stepik.org/lesson/30426/step/1?unit=11043
+
+- Оператор композиции для типов
+- Композиция функторов как функтор
+- Выполнение законов функтора для композиции
+- Композиция как аппликативный функтор: pure
+- Композиция как аппликативный функтор: семантика (<*>)
+- Композиция как аппликативный функтор: реализация (<*>)
+
+### 1.5.2 Data.Functor.Compose
+
+`|.|` aka `Compose` (`Data.Functor.Compose`)
+композиция двух типов (функторов), чтобы получить функтор.
+
+Пример.
+Если матрица это список списков, то матрица это композиция двух типов?
+Чтобы матрица-функтор могла применить функцию (скажем, `^2`) к элементам (`fmap`),
+надо эту функцию протащить через два "барьера": список списков.
+
+Идею можно обобщить, имея два функтора, сделать их композицию для такого протаскивания функций ...
+получим универсальный `fmap` для композиции функторов.
+
+Чтобы это сделать на уровне типов, нужен тип
+```hs
+{-# LANGUAGE TypeOperators #-} -- для разрешения `|.|` в качестве имени оператора над типами
+ghci> :set -XTypeOperator
+{-# LANGUAGE PolyKinds #-}
+
+infixr 9 |.|
+newtype (|.|) f g a = Cmps { getCmps :: f (g a) } deriving (Eq, Show) -- design time wrapper
+-- `f (g a)` это два конструктора типов, примененные к а.
+-- kind a = *
+-- kind g = * -> *
+-- kind f = * -> *
+ghci> :kind (|.|)
+(|.|) :: (k -> *) -> (k1 -> k) -> k1 -> * -- (* -> *) -> (* -> *) -> * -> *
+
+ghci> :t Just "abc"
+Just "abc" :: Maybe [Char]
+-- конструктор списка, сверху конструктор Maybe
+ghci> :t Just "abc" :: Maybe ([] Char)
+Just "abc" :: Maybe ([] Char) :: Maybe [Char]
+-- с помощью нашего оператора композиции типов:
+ghci> :t Cmps (Just "abc")
+Cmps (Just "abc") :: (|.|) Maybe [] Char
+-- та же жопа только в профиль
+ghci> :t Cmps (Just "abc") :: (Maybe |.| []) Char -- `Maybe |.| []` композиция двух типов (функторов)
+Cmps (Just "abc") :: (Maybe |.| []) Char :: (|.|) Maybe [] Char
+```
+repl
+
+```hs
+https://stepik.org/lesson/30426/step/3?unit=11043
+TODO
+{--
+Населите допустимыми нерасходящимися выражениями следующие типы 
+
+type A   = ((,) Integer |.| (,) Char) Bool
+type B t = ((,,) Bool (t -> t) |.| Either String) Int
+type C   = (|.|) ((->) Bool) ((->) Integer) Integer
+--}
+type A   = ((,) Integer |.| (,) Char) Bool
+type B t = ((,,) Bool (t -> t) |.| Either String) Int
+type C   = (|.|) ((->) Bool) ((->) Integer) Integer
+
+a :: A
+a = undefined
+
+b :: B t
+b = undefined
+
+c :: C
+c  = undefined
+
+-- solution
+-- haskell hole driven development
+-- Вместо undefined пишем: Cmps (_ a)
+
+```
+test
+
+### 1.5.4 релизация fmap для Compose
+
+Оператор композиции типов очень похож на оператор композиции функций.
+По сути, конструктор типа это и есть функция, почему бы такие функции не композить.
+
+Хотим сделать оператор `Compose` функтором. Значит, надо связать все параметры,
+кроме последнего
+```hs
+ghci> :kind (|.|)
+(|.|) :: (k -> *) -> (k1 -> k) -> k1 -> * -- (* -> *) -> (* -> *) -> * -> *
+
+infixr 9 |.|
+newtype (|.|) f g a = Cmps { getCmps :: f (g a) } deriving (Eq, Show)
+
+-- f, g оба функторы, иначе не работает, ибо делаем композицию функторов
+instance (Functor f, Functor g) => Functor (f |.| g) where
+    fmap :: (a -> b) -> (f |.| g) a -> (f |.| g) b -- сигнатура, функция -> функтор -> функтор
+    fmap :: (a -> b) -> (|.|) f g a -> (|.|) f g b -- то же, в префиксной форме
+    fmap h (Cmps x) = _ -- надо протащить h через f, g
+-- имеем x :: f (g a)
+-- h :: a -> b
+-- f, g это функторы, протаскивание функции делается через fmap
+-- допустим, мы сделаем функцию phi :: g a -> g b
+-- тогда (fmap phi x) :: f (g b)
+-- что такое phi? Это `(fmap h) :: g a -> g b` -- для любого функтора g
+    fmap h (Cmps x) = Cmps fgb where
+        fgb = fmap phi x where
+            phi = fmap h
+    fmap h (Cmps x) = Cmps $ fmap (fmap h) x
+
+ghci> fmap succ $ Cmps (Just "abc")
+Cmps {getCmps = Just "bcd"}
+```
+repl
+
+```hs
+https://stepik.org/lesson/30426/step/5?unit=11043
+TODO
+
+Сделайте тип `Cmps3`
+представителем класса типов `Functor`
+при условии, что первые его три параметра являются функторами:
+{--
+newtype Cmps3 f g h a = Cmps3 { getCmps3 :: f (g (h a)) } 
+  deriving (Eq,Show) 
+
+GHCi> fmap (^2) $ Cmps3 [[[1],[2,3,4],[5,6]],[],[[7,8],[9,10,11]]]
+Cmps3 {getCmps3 = [[[1],[4,9,16],[25,36]],[],[[49,64],[81,100,121]]]}
+--}
+newtype Cmps3 f g h a = Cmps3 { getCmps3 :: f (g (h a)) } 
+  deriving (Eq,Show) 
+
+instance Functor (Cmps3 f g h) where
+  fmap = undefined
+
+-- solution
+
+getCmps3 $ succ <$> Cmps3 (Just ["abc"])
+Just ["bcd"]
+
+```
+test
+
+### 1.5.6 первый закон функтора, доказательство
+
+Докажем законы функтора для Compose
+```hs
+infixr 9 |.|
+newtype (|.|) f g a = Cmps { getCmps :: f (g a) } deriving (Eq, Show)
+instance (Functor f, Functor g) => Functor (f |.| g) where
+    fmap h (Cmps x) = Cmps $ fmap (fmap h) x
+
+{--
+law #1, левый id
+fmap id fa = fa
+
+перепишем
+fmap id fa = id fa
+и в pointfree style
+fmap id = id
+
+если для f, g это верно, то и для композиции верно
+
+fmap id (Cmps x)
+=?
+Cmps x
+
+Cmps $ fmap (fmap id) x -- fmap id = id для функтора g
+Cmps $ fmap id x -- fmap id = id для функтора f
+Cmps $ id x -- id x = x
+Cmps x
+--}
+```
+repl
+
+```hs
+https://stepik.org/lesson/30426/step/7?unit=11043
+TODO
+{--
+Докажите выполнение второго закона функторов для композиции двух функторов
+
+fmap h2 (fmap h1 (Cmps x)) = fmap (h2 . h1) (Cmps x)
+aka
+fmap f . fmap g = fmap (f . g)
+
+- Write an answer
+- Send your best submission to review
+- Review submissions
+- Wait for reviews of your solution
+- Get points, max score is 3 points 
+--}
+
+-- solution
+
+Такой формат задач хорош для традиционного класса, где все собрались и обсудили вопросы.
+Для формата MOOC, где между студнем, классом и преподавателями пропасть, это не годится.
+Кроме того, не для того я пошел в программисты, чтобы руками подстановки писать (это работа компилятора).
+
+https://www.schoolofhaskell.com/user/edwardk/snippets/fmap
+> ... the second actually follows from the first and parametricity,
+so you only need to sit down and prove one Functor law when you go to supply a Functor!
+
+Докажем первый:
+
+fmap id = id
+
+дана реализация
+fmap :: (a -> b) -> (|.|) f g a -> (|.|) f g b
+fmap h (Cmps x) = Cmps $ fmap (fmap h) x
+
+предположим, что `fmap id = id` верно для f, g
+
+докажем, что
+fmap id (Cmps x)
+=
+Cmps x
+где
+x :: f (g a)
+
+Cmps $ fmap (fmap id) x -- fmap id = id для функтора g, тогда:
+Cmps $ fmap id x -- fmap id = id для функтора f, тогда:
+Cmps $ id x -- id x = x, тогда:
+Cmps x -- что и требовалось
+
+-- Comment from teacher
+
+Назовём наши функторы F⁡ и GG, то есть
+Cmps x :: (F |.| G) a
+
+Для удобства перепишем левую часть закона через композицию. Теперь требуется проверить, что:
+(fmap h2 . fmap h1) (Cmps x) = fmap (h2 . h1) (Cmps x)
+
+для произвольных
+x  :: F (G a)
+h1 :: a -> b
+h2 :: b -> c
+
+fmap h2 (fmap h1 (Cmps x)) ≡ fmap h2 (Cmps $ fmap (fmap h1) x)  -- def fmap
+                           ≡ Cmps $ fmap (fmap h2) (fmap (fmap h1) x)  -- def fmap
+                           ≡ Cmps $ (fmap (fmap h2) . fmap (fmap h1)) x  -- def (.)
+                           = Cmps $ fmap (fmap h2 . fmap h1) x  -- Functor F
+                           = Cmps $ fmap (fmap (h2 . h1)) x  -- Functor G
+
+fmap (h2 . h1) (Cmps x) ≡ Cmps $ fmap (fmap (h2 . h1)) x  -- def fmap
+
+```
+test
+
+### 1.5.8 Applicative для композиции аппликативов, pure
+
+Композиция функторов является функтором. Доказано.
+Что про аппликативные функторы? Композиция аппликативов будет аппликативным функтором?
+Да.
+```hs
+infixr 9 |.|
+newtype (|.|) f g a = Cmps { getCmps :: f (g a) } deriving (Eq, Show)
+instance (Functor f, Functor g) => Functor (f |.| g) where
+    fmap h (Cmps x) = Cmps $ fmap (fmap h) x
+
+instance (Applicative f, Applicative g) => Applicative (f |.| g) where
+    pure :: a -> (|.|) f g a
+    pure = Cmps . pure . pure
+    (<*>) = undefined
+
+getCmps (pure 42 :: (|.|) [] [] Int)
+[[42]]
+
+ghci> getCmps (pure 42 :: ([] |.| [] |.| []) Int)
+[Cmps {getCmps = [[42]]}]
+```
+repl
+
+```hs
+https://stepik.org/lesson/30426/step/9?unit=11043
+TODO
+{--
+Напишите универсальные функции
+
+unCmps3 :: Functor f => (f |.| g |.| h) a -> f (g (h a))
+unCmps4 :: (Functor f2, Functor f1) => (f2 |.| f1 |.| g |.| h) a -> f2 (f1 (g (h a)))
+
+позволяющие избавляться от синтаксического шума для композиции нескольких функторов:
+
+GHCi> pure 42 :: ([] |.| [] |.| []) Int
+Cmps {getCmps = [Cmps {getCmps = [[42]]}]}
+GHCi> unCmps3 (pure 42 :: ([] |.| [] |.| []) Int)
+[[[42]]]
+GHCi> unCmps3 (pure 42 :: ([] |.| Maybe |.| []) Int)
+[Just [42]]
+GHCi> unCmps4 (pure 42 :: ([] |.| [] |.| [] |.| []) Int)
+[[[[42]]]]
+--}
+unCmps3 :: Functor f => (f |.| g |.| h) a -> f (g (h a))
+unCmps3 = undefined
+
+unCmps4 :: (Functor f2, Functor f1) => (f2 |.| f1 |.| g |.| h) a -> f2 (f1 (g (h a)))
+unCmps4 = undefined
+
+-- solution
+-- в совсем современном Haskell активно используют coerce из Data.Coerce
+
+-- pure 42 :: ([] |.| [] |.| []) Int
+-- getCmps (pure 42 :: ([] |.| [] |.| []) Int)
+
+```
+test
+
+### 1.5.10 Applicative композиции, `applied over <*>`, семантика
+
+Какая будет семантика апплая для композиции аппликативов?
+Аппликатив, вычисление с эффектами, в некотором контексте.
+
+Для аппликатива списка: список функций "апплай овер" список значений (с вложенным циклом).
+Для аппликатива мейби: функция "апплай овер" либо ничего, либо значение.
+Композиция списка и мейби не коммутативна, будут разные результаты: список опций или опция списка.
+
+```hs
+infixr 9 |.|
+newtype (|.|) f g a = Cmps { getCmps :: f (g a) } deriving (Eq, Show) -- design time wrapper
+instance (Functor f, Functor g) => Functor (f |.| g) where
+    -- fmap :: (a -> b) -> (|.|) f g a -> (|.|) f g b
+    fmap h (Cmps x) = Cmps $ fmap (fmap h) x
+instance (Applicative f, Applicative g) => Applicative (f |.| g) where
+    -- pure :: a -> (|.|) f g a
+    pure = Cmps . pure . pure
+    (<*>) = undefined
+
+-- examples
+
+getCmps $ Cmps [Just (+1), Just (+2)] <*> Cmps [Just 30, Just 40]
+-- оператор ап, слева композиция списка опций, справа композиция списка опций
+-- [Just (+1), Just (+2)]
+-- [Just 30, Just 40]
+ghci> [(+1), (+2)] <*> [30, 40]
+[31,41,32,42]
+
+getCmps $ Cmps [Just (+1), Just (+2)] <*> Cmps [Nothing, Just 40]
+
+-- переставим местами конструкторы в композиции аппликативов
+getCmps $ Cmps (Just [(+1), (+2)]) <*> Cmps (Just [30, 40])
+getCmps $ Cmps (Just [(+1), (+2)]) <*> Cmps (Nothing)
+```
+repl
+
+### 1.5.11 Applicative композиции, `applied over <*>`, реализация
+
+Продолжение про реализацию `<*>` для композиции аппликативных функторов.
+```hs
+infixr 9 |.|
+newtype (|.|) f g a = Cmps { getCmps :: f (g a) } deriving (Eq, Show) -- design time wrapper
+instance (Functor f, Functor g) => Functor (f |.| g) where
+    -- fmap :: (a -> b) -> (|.|) f g a -> (|.|) f g b
+    fmap h (Cmps x) = Cmps $ fmap (fmap h) x
+instance (Applicative f, Applicative g) => Applicative (f |.| g) where
+    -- pure :: a -> (|.|) f g a
+    pure = Cmps . pure . pure
+
+    (<*>) :: f (a -> b) -> f a -> f b
+    (<*>) :: (|.|) f g (a -> b) -> (|.|) f g a -> (|.|) f g b -- в развернутом виде
+    Cmps h <*> Cmps x = Cmps $ (fmap (<*>) h) <*> x
+
+-- разберем реализацию исходя из типов
+-- (|.|) h -> (|.|) x -> (|.|) y -- по этой сигнатуре получаем заготовку реализации:
+-- Cmps h <*> Cmps x = Cmps y -- внешние типы, контексты, где:
+h :: f (g (a -> b))
+x :: f (g a)
+y :: f (g b)
+-- fmap (<*>) h -- поднимаем оператор ап в функтор эф, там внутри этот оператор применится к функтору же,
+-- в котором лежат функции a -> b:
+<*> :: g (a -> b) -> (g a -> g b) -- по определению оператора ап
+fmap <*> :: f (g (a -> b)) -> f (g a -> g b) -- по типу видно, что аргумент это h
+fmap <*> h :: f (g a -> g b) -- стрелка, дающая на выходе то, что нам надо, если поднять это в контейнер f, который `x`
+
+-- осталось проверить, выполняются ли 4 закона аппликативных фукторов для композиции, при условии,
+-- что композиция из аппликативных функторов для которых законы выполняются.
+
+-- alternative
+Cmps f1 <*> Cmps f2 = Cmps (liftA2 (<*>) f1 f2)
+```
+repl
 
 
 grep `TODO` markers, fix it.

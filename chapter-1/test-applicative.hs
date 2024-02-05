@@ -1,8 +1,13 @@
+{-# LANGUAGE TypeOperators #-} -- для разрешения `|.|` в качестве имени оператора над типами
+{-# LANGUAGE PolyKinds #-}
+
 module TestApplicative where
-import Prelude (show, read, String, Char, Functor, fmap, Bool, otherwise, Int, (==), (*), id, const, Maybe (..), null)
+import Prelude (show, read, String, Char, Functor, fmap, Bool, otherwise, Int, (==), (*), id, const, Maybe (..), null, ($), succ, (.), undefined, Num ((+)))
 import Text.Parsec (getParserState)
 import Data.Char
 import Control.Applicative hiding (many)
+import GHC.Show (Show)
+import GHC.Base (Eq)
 
 newtype Parser a = Parser { apply :: String -> [(a, String)] }
 
@@ -73,3 +78,36 @@ instance Alternative Parser where
                 else ps
 
 test4 = apply (char 'A' <|> char 'B') "ABC"
+
+infixr 9 |.|
+newtype (|.|) f g a = Cmps { getCmps :: f (g a) } deriving (Eq, Show) -- design time wrapper
+-- `f (g a)` это два конструктора типов, примененные к а.
+-- kind a = *
+-- kind g = * -> *
+-- kind f = * -> *
+
+-- f, g оба функторы, иначе не работает, ибо делаем композицию функторов
+instance (Functor f, Functor g) => Functor (f |.| g) where
+    -- fmap :: (a -> b) -> (f |.| g) a -> (f |.| g) b -- сигнатура, функция -> функтор -> функтор
+    -- fmap :: (a -> b) -> (|.|) f g a -> (|.|) f g b -- то же, в префиксной форме
+    -- fmap h (Cmps x) = _ -- надо протащить h через f, g
+-- имеем x :: f (g a)
+-- h :: a -> b
+-- f, g это функторы, протаскивание функции делается через fmap
+-- допустим, мы сделаем функцию phi :: g a -> g b
+-- тогда (fmap phi x) :: f (g b)
+-- что такое phi? Это `(fmap h) :: g a -> g b` -- для любого функтора g
+    -- fmap h (Cmps x) = Cmps fgb where
+    --     fgb = fmap phi x where
+    --         phi = fmap h
+    fmap h (Cmps x) = Cmps $ fmap (fmap h) x
+
+test5 = fmap succ $ Cmps (Just "abc")
+
+instance (Applicative f, Applicative g) => Applicative (f |.| g) where
+    -- pure :: a -> (|.|) f g a
+    pure = Cmps . pure . pure
+    (<*>) = undefined
+
+test6 = getCmps $ Cmps [Just (+1), Just (+2)] <*> Cmps [Just 30, Just 40]
+test7 = getCmps $ Cmps (Just [(+1), (+2)]) <*> Cmps (Just [30, 40])
