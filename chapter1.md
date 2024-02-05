@@ -4,9 +4,15 @@
 
 [code sandbox](./chapter-1/test-applicative.hs)
 
-Мотивация: ???
+Мотивация: на примере парсера текста, композиция вычислений с эффектами,
+построение цепочек вычислений, создание комбинаторов (функций из функций).
+Универсальные интерфейсы для тайп-классов.
 
-definitions: ???
+definitions:
+- Functor (fmap)
+- Applicative (pure, `<*>`)
+- Alternative (empty, `<|>`)
+- Compose f g a, Applicative для Compose
 
 ## chapter 1.1, Определение аппликативного функтора
 
@@ -2357,18 +2363,21 @@ instance (Applicative f, Applicative g) => Applicative (f |.| g) where
 
 -- examples
 
-getCmps $ Cmps [Just (+1), Just (+2)] <*> Cmps [Just 30, Just 40]
+ghci> getCmps $ Cmps [Just (+1), Just (+2)] <*> Cmps [Just 30, Just 40]
+[Just 31,Just 41,Just 32,Just 42]
 -- оператор ап, слева композиция списка опций, справа композиция списка опций
 -- [Just (+1), Just (+2)]
 -- [Just 30, Just 40]
 ghci> [(+1), (+2)] <*> [30, 40]
 [31,41,32,42]
 
-getCmps $ Cmps [Just (+1), Just (+2)] <*> Cmps [Nothing, Just 40]
-
 -- переставим местами конструкторы в композиции аппликативов
-getCmps $ Cmps (Just [(+1), (+2)]) <*> Cmps (Just [30, 40])
-getCmps $ Cmps (Just [(+1), (+2)]) <*> Cmps (Nothing)
+ghci> getCmps $ Cmps [Just (+1), Just (+2)] <*> Cmps [Nothing, Just 40]
+[Nothing,Just 41,Nothing,Just 42]
+ghci> getCmps $ Cmps (Just [(+1), (+2)]) <*> Cmps (Just [30, 40])
+Just [31,41,32,42]
+ghci> getCmps $ Cmps (Just [(+1), (+2)]) <*> Cmps (Nothing)
+Nothing
 ```
 repl
 

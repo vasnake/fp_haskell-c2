@@ -2,7 +2,12 @@
 {-# LANGUAGE PolyKinds #-}
 
 module TestApplicative where
-import Prelude (show, read, String, Char, Functor, fmap, Bool, otherwise, Int, (==), (*), id, const, Maybe (..), null, ($), succ, (.), undefined, Num ((+)))
+
+import Prelude (
+    show, read, String, Char, Functor, fmap, Bool, otherwise, Int, 
+    (==), (*), id, const, Maybe (..), null, ($), succ, (.), undefined, Num ((+))
+    )
+
 import Text.Parsec (getParserState)
 import Data.Char
 import Control.Applicative hiding (many)
@@ -107,7 +112,9 @@ test5 = fmap succ $ Cmps (Just "abc")
 instance (Applicative f, Applicative g) => Applicative (f |.| g) where
     -- pure :: a -> (|.|) f g a
     pure = Cmps . pure . pure
-    (<*>) = undefined
+    -- (<*>) :: f (a -> b) -> f a -> f b
+    -- (<*>) :: (|.|) f g (a -> b) -> (|.|) f g a -> (|.|) f g b -- в развернутом виде
+    Cmps h <*> Cmps x = Cmps $ (fmap (<*>) h) <*> x
 
 test6 = getCmps $ Cmps [Just (+1), Just (+2)] <*> Cmps [Just 30, Just 40]
 test7 = getCmps $ Cmps (Just [(+1), (+2)]) <*> Cmps (Just [30, 40])

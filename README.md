@@ -11,6 +11,8 @@ https://stepik.org/693
 - [Chapter 3, монады и эффекты](./chapter3.md)
 - [Chapter 4, трансформеры монад](./chapter4.md)
 
+grep `TODO` markers, fix it.
+
 ## short notes
 
 > чистые функции только лишь производят вычисления, а функции с эффектами
