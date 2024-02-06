@@ -6,7 +6,7 @@ module TestEffects where
 import Text.Parsec (getParserState)
 import Data.Char (toLower)
 import Control.Applicative hiding (many)
-import Data.Foldable (Foldable)
+import Data.Foldable (Foldable, fold, foldMap, maximum)
 
 -- import GHC.Show (Show)
 -- import GHC.Base (Eq)
@@ -15,6 +15,7 @@ import Prelude (
     (==), (*), id, const, Maybe (..), null, ($), succ, (.), undefined, Num ((+)), Show, Eq,
     foldr, foldl, Either (..)
     )
+import Data.Monoid (Sum(..), Product (..))
 
 test = foldr (+) 0 [0..42]
 test2 = foldr (*) 3 (Just 14)
@@ -32,3 +33,8 @@ instance Foldable Tree where
 
 treeToList :: Tree a -> [a]
 treeToList = foldr (:) []
+
+test5 = fold [[1,2,3],[4,5]]
+test6 = foldMap Sum [1,2,3,4]
+test7 = foldMap Product [1,2,3,4]
+test8 = maximum (99, 42)
