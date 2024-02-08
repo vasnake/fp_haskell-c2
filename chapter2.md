@@ -1093,7 +1093,130 @@ https://stepik.org/lesson/31555/step/1?unit=11808
 - Реализации методов базовых классов по умолчанию: foldmapDefault
 - Полное определение класса Traversable
 
-### 2.3.2
+### 2.3.2 Traverse identity law
+
+Есть шесть законов для траверсабл, по сути они похожи на законы для функтора,
+что не удивительно, учитывая их близкую природу
+```hs
+-- identity law
+-- вспомним, как это было для функтора
+
+class Functor f where
+    fmap :: (a -> b) -> f a -> f b -- <$>
+
+fmap id = id -- identity law для функтора, структура не меняется (и значения не меняются)
+
+-- для траверсабла так нельзя,
+-- 1: по сигнатуре ф. id сюда не подходит,
+-- 2: сам смысл траверса в том, что меняется структура (аппликатив наружу, траверс. внутрь)
+-- как быть?
+
+class (Functor t, Foldable t) => Traversable t where
+    sequenceA :: Applicative f => t (f a) -> f (t a)
+    traverse :: Applicative f => (a -> f b) -> t a -> f (t b)
+
+traverse Identity = Identity -- identity law для траверсабл
+-- траверс без эффектов не должен менять контекст (не вносит отсебятины)
+
+ghci> :t Identity -- аппликативный функтор
+Identity :: a -> Identity a
+
+ghci> :i Identity -- контекст без эффектов
+newtype Identity a = Identity {runIdentity :: a} -- Defined in ‘Data.Functor.Identity’
+
+instance Applicative Identity where
+    pure = Identity
+    (Identity g) <*> (Identity x) = Identity $ g x
+
+ghci> traverse Identity $ "foo"
+Identity "foo"
+
+ghci> (traverse Identity $ "foo") == (Identity "foo")
+True
+
+-- т.е. при протаскивании стрелки Клейсли (айдентити) через "список", с последующим вытаскиванием
+-- аппликатива (эффектов) наружу, мы получим то же самое, что и на входе.
+-- Ничего не поменяется, id, при условии протаскивания без-эффектной функции через траверс
+
+```
+repl
+
+### 2.3.3 Traverse composition law
+
+Закон композиции траверсов (идентичность траверсу композиции стрелок Клейсли)
+```hs
+-- Как это было для функтора
+class Functor f where
+    fmap :: (a -> b) -> f a -> f b -- <$>
+
+fmap (g1 . g2) = (fmap g1) . (fmap g2) -- закон композиции для функтора
+
+-- А теперь для траверса
+
+class (Functor t, Foldable t) => Traversable t where
+    sequenceA :: Applicative f => t (f a) -> f (t a)
+    traverse :: Applicative f => (a -> f b) -> t a -> f (t b)
+
+-- закон композиции для траверс
+traverse $ Compose . (fmap g2) . g1 = Compose . (fmap $ traverse g2) . (traverse g1)
+-- траверс композиции эквивалентен композиции траверсов
+-- с учетом выворачивания двух контекстов: аппликатива и траверсабла
+-- но почему g2, g1 а не g1, g2 ?
+
+ghci> :i Compose
+newtype Compose f g a = Compose {getCompose :: f (g a)} -- Defined in ‘Data.Functor.Compose’
+infixr 9 `Compose` -- право-ассоциативный
+
+ghci> :t Compose
+    f (g a) -> Compose f g a
+
+ghci> :t Compose (Just $ Right "foo")
+Compose (Just $ Right "foo") :: Compose Maybe (Either a) String
+ghci> :t Just $ Right "foo"
+Just $ Right "foo" :: Maybe (Either a String)
+
+-- разберем происходящее: композиция стрелок Клейсли (в ап.функтор) использованная в одном траверс,
+-- эквивалентна двум последовательным траверсам (композиции) для каждой стрелки по отдельности
+traverse $ Compose . (fmap g2) . g1 = Compose . (fmap $ traverse g2) . (traverse g1)
+traverse (Compose . fmap g2 . g1) ta = Compose (fmap (traverse g2) (traverse g1 ta))
+
+ta :: t a -- traversable
+g1 :: Applicative f1 => a -> f1 b
+g2 :: Applicative f2 => b -> f2 c
+(traverse g1 ta) :: f1 (t b) -- вот тут видно, что второй траверс сюда не влезает, нужен fmap для поднятия внутрь f1
+
+-- example для правой части закона композиции
+ghci> fmap (traverse Right) (traverse Just "foo")
+Just (Right "foo")
+-- fmap протащил Right внутрь Just
+
+ghci> (traverse Just "foo")
+Just "foo"
+ghci> (traverse Right) (traverse Just "foo")
+Right (Just "foo")
+
+ghci> :t fmap (traverse Right) (traverse Just "foo")
+  :: Maybe (Either a [Char])
+ghci> :t Compose (fmap (traverse Right) (traverse Just "foo"))
+  :: Compose Maybe (Either a) [Char]
+
+-- левая часть
+ghci> traverse (Compose . fmap Right . Just) "foo"
+Compose (Just (Right "foo")) -- результат такой же, Just вылез наружу
+ghci> :t traverse (Compose . fmap Right . Just) "foo"
+  :: Compose Maybe (Either a) [Char]
+
+ghci> :t  (Compose . fmap Right . Just)
+     :: a1 -> Compose Maybe (Either a2) a1
+
+ghci> :t  (fmap Right . Just)
+     :: a1 -> Maybe (Either a2 a1)
+-- a1 -> Maybe (Either a2 a1)
+-- видно, что это стрелка Клейсли, подходит для передачи в traverse первым аргументом
+```
+repl
+
+### 2.3.4
 ```hs
 
 ```

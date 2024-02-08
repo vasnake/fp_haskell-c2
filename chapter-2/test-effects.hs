@@ -28,6 +28,10 @@ import Data.Traversable (
     sequence, sequenceA, Traversable(..), traverse
     )
 
+-- import Control.Monad.Identity ( Identity(..) )
+import Data.Functor.Identity ( Identity(..) )
+import Data.Functor.Compose ( Compose(..) )
+
 -- import GHC.Show (Show)
 -- import GHC.Base (Eq)
 import Prelude (
