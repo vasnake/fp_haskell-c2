@@ -809,7 +809,8 @@ test
 
 ### 2.2.8 type-class Traversable
 
-Траверсабл не только производит эффекты (аппликативные), но и клонирует структуру, по которой итерируется
+Траверсабл не только производит эффекты (аппликативные), как фолдабл,
+но и клонирует структуру, по которой итерируется
 ```hs
 -- расширение функтора и фолдабла
 class (Functor t, Foldable t) => Traversable t where
@@ -827,6 +828,277 @@ class (Functor t, Foldable t) => Traversable t where
 -- traverse | sequenceA
 ```
 repl
+
+### 2.2.9 instance Traversable Maybe
+
+Представители (инстансы) траверсабл, реализация для: мейби.
+Реализация траверсабл повторяет реализацию функтора (fmap), с добавлением прослойки типа аппликатив
+```hs
+class (Functor t, Foldable t) => Traversable t where
+    sequenceA :: Applicative f => t (f a) -> f (t a) -- "список" аппликативов преобразовать в аппликатив "списка"
+    sequenceA = traverse id
+    traverse :: Applicative f => (a -> f b) -> t a -> f (t b)
+    traverse = sequenceA . fmap
+
+-- Functor t, Foldable t -- это мейби
+instance Traversable Maybe where
+    -- завернуть наш фолдабл функтор Maybe в некий аппликативный функтор, заворачивание в аппликатив через pure
+    traverse :: Applicative f => (a -> f b) -> Maybe a -> f (Maybe b)
+    traverse _ Nothing = pure Nothing -- функция бесполезна для "ничего"
+    traverse g (Just x) = (pure Just) <*> (g x)
+    -- pure Just поднимает конструктор в аппликатив, после чего произойдет `apply over` (g x)
+
+-- examples
+
+ghci> traverse (\ x -> [x, x+2, x^2]) (Just 5)
+[Just 5,Just 7,Just 25] -- аппликатив это список
+-- выполнены эффекты, список из трех элементов;
+-- воспроизведена структура фолдабл функтора мэйби: результаты завернуты в Just
+
+ghci> traverse (\ x -> [x, x+2, x^2]) (Nothing)
+[Nothing] -- почему не три? Согласно семантики траверсабл "ничего": аппликатив ничего
+-- эффект произведен: список; структура фолдабла воспроизведена
+
+ghci> sequenceA (Just ("foo", 42))
+("foo",Just 42) -- фолдабл (мейби) аппликатива (пары) преобразовать в аппликатив (пару) фолдабла (мейби)
+
+-- обратите внимание, реализация траверсабл очень похожа на реализацию функтора
+-- так оно и понятно: семантика аналогичная, протащить функцию в контекст
+-- только для траверсабла добавляется контекст "вычисления с эффектами", аппликативный функтор дает нам
+-- вычисление с эффектами. Для поддержки этого нам и нужно сделать траверсабл, ибо просто функтора недостаточно
+
+class Functor f where
+    fmap :: (a -> b) -> f a -> f b -- fmap or <$>
+instance Functor Maybe where
+    fmap _ Nothing = Nothing
+    fmap g (Just x) = Just $ g x
+
+instance Traversable Maybe where
+    traverse _ Nothing = pure Nothing
+    traverse g (Just x) = (pure Just) <*> (g x)
+
+-- траверсабл позволяет нам обобщить функтор (вычисление в контексте) до цепочки вычислений с эффектами
+-- это наблюдение позволяет нам, имея реализацию функтора для (конструктора) типа, написать траверсабл механически
+
+```
+repl
+
+### 2.2.10 instance Traversable `((,) s)`
+
+траверсабл для пары
+```hs
+-- посмотрим на функтор для пары
+class Functor f where
+    fmap :: (a -> b) -> f a -> f b
+instance Functor ((,) s) where
+    fmap g (x, y) = (x, g y)
+    fmap g (x, y) = (,) x (g y)
+
+instance Traversable ((,) s) where
+    traverse :: Applicative f => (a -> f b) -> (s, a) -> f (s, b)
+    traverse g (x, y) = (pure ((,) x)) <*> (g y) -- аналогично: поднять конструктор пары в аппликатив, ап его на результат (g y)
+    traverse g (x, y) = ((,) x) <$> (g y) -- согласно закону левого pure для аппликатива
+
+-- examples
+
+ghci> sequenceA ("foo", Just 42)
+Just ("foo",42)
+
+ghci> sequenceA $ sequenceA ("foo", Just 42)
+("foo",Just 42)
+```
+repl
+
+```hs
+https://stepik.org/lesson/30428/step/11?unit=11045
+TODO
+{--
+Сделайте тип `Triple`
+
+data Triple a = Tr a a a  deriving (Eq,Show)
+
+представителем класса типов `Traversable`
+
+GHCi> foldl (++) "!!" (Tr "ab" "cd" "efg")
+"!!abcdefg"
+GHCi> traverse (\x -> if x>10 then Right x else Left x) (Tr 12 14 16)
+Right (Tr 12 14 16)
+GHCi> traverse (\x -> if x>10 then Right x else Left x) (Tr 12 8 4)
+Left 8
+GHCi> sequenceA (Tr (Tr 1 2 3) (Tr 4 5 6) (Tr 7 8 9))
+Tr (Tr 1 4 7) (Tr 2 5 8) (Tr 3 6 9)
+--}
+
+-- solution
+
+```
+test
+
+```hs
+https://stepik.org/lesson/30428/step/12?unit=11045
+TODO
+{--
+Сделайте тип данных `Result`
+
+data Result a = Ok a | Error String deriving (Eq,Show)
+
+представителем класса типов `Traversable` (и всех других необходимых классов типов).
+
+GHCi> traverse (\x->[x+2,x-2]) (Ok 5)
+[Ok 7,Ok 3]
+GHCi> traverse (\x->[x+2,x-2]) (Error "!!!")
+[Error "!!!"]
+--}
+
+-- solution
+
+```
+test
+
+### 2.2.13 instance Traversable `[]`
+
+Траверсабл для списка, протаскивание аппликатива в список.
+Если аппликатив тоже список, имеем головоломку
+```hs
+class Functor f where
+    fmap :: (a -> b) -> f a -> f b
+instance Functor [] where
+    fmap _ [] = []
+    fmap g (x:xs) = (:) (g x) (fmap g xs) -- префиксная запись рекурсивной реализации map
+
+instance Traversable [] where
+    traverse :: Applicative f => (a -> f b) -> [a] -> f [b]
+    traverse _ [] = pure []
+    traverse g (x:xs) = (:) <$> (g x) <*> (traverse g xs)
+
+-- examples
+
+ghci> traverse (\x -> (show x, x^2)) [1,2,3]
+("123",[1,4,9]) -- и эффекты (накопления лога в паре) и структура (списка) и значения -- все есть
+
+ghci> traverse (\x -> [x+10, x+20]) [1,2,3] -- 2^3 = 8, эффект множественных вычислений в аппликативе списка
+[
+    [11,12,13],[11,12,23],
+    [11,22,13],[11,22,23],
+    [21,12,13],[21,12,23],
+    [21,22,13],[21,22,23]
+    ]
+-- для трех элементов входа будет построена такая выражения
+(:) <$> [11, 21] <*> ((:) <$> [12, 22] <*> ((:) <$> [13,23] <*> pure []))
+-- после чего аппликатив сделает "каждый с каждым"; эти числа заполняют места 1 2 3 в триадах,
+-- причем порядок в выражении указывает на их порядок в триадах
+[13,23] <*> pure [] -- два результата (два варианта последних элементов триад)
+[12, 22] <*> ((:) <$> [13,23] <*> pure []) -- два на два = четыре триады (два варианта предпоследних элементов, для двух вариантов последних)
+[11, 21] <*> ((:) <$> [12, 22] <*> ((:) <$> [13,23] <*> pure [])) -- два на четыре = восемь элементов:
+-- предыдущие четыре триады два раза с этими двумя значениями на первых местах триады
+
+ghci> sequenceA [[11,21], [12,22], [13,23]] -- traverse id
+[[11,12,13],[11,12,23],[11,22,13],[11,22,23],[21,12,13],[21,12,23],[21,22,13],[21,22,23]]
+-- наружная структура уходит внутрь (три элмента), аппликатив списка дает внутрениие циклы "каждый с каждым"
+
+-- список операций протянуть через список значений, количество операций дает количество вариантов для каждого числа из входа [1,2,3]
+ghci> traverse (\x -> [x^2, x+10]) [1,2,3] -- каждое число будет ^2, +10, т.е. даст два варианта (две ветки вычислений других чисел)
+[
+    [1,4,9],
+    [1,4,13],
+    [1,12,9],
+    [1,12,13],
+    [11,4,9],
+    [11,4,13],
+    [11,12,9],
+    [11,12,13]
+    ]
+-- трех-элементный контейнер восемью способами
+-- [x, y, z]: z = 9, 13 два варианта последнего числа (3 ^2, +10)
+-- y: 4, 12 два варианта второго числа (2 ^2, +10)
+-- x: 1, 11 два варианта первого числа (1 ^2, +10)
+
+-- это была демонстрация семантики "каждый с каждым". Что насчет семантики "зип"?
+ghci> sequenceA (map ZipList [[11,21], [12,22], [13,23]]) -- два элемента, внутри которых будут результаты зипа трех списков
+ZipList {getZipList = [[11,12,13],[21,22,23]]} -- список первых элементов, список вторых элементов
+-- идентично
+ghci> traverse ZipList [[11,21], [12,22], [13,23]]
+ZipList {getZipList = [[11,12,13],[21,22,23]]}
+-- внешняя структура ушла внутрь (три элемента), результатов всего два согласно семантике зип:
+-- по размеру списков на входе аппликативного зипа
+
+-- traverse ZipList сработал как транспонирование матрицы
+    [11,21], 
+    [12,22], 
+    [13,23]
+->
+    [11,12,13],
+    [21,22,23]
+
+```
+repl
+
+```hs
+https://stepik.org/lesson/30428/step/14?unit=11045
+TODO
+{--
+Сделайте двоичное дерево
+
+data Tree a = Nil | Branch (Tree a) a (Tree a)  deriving (Eq, Show)
+
+представителем класса типов `Traversable` (а также всех других необходимых классов типов).
+
+GHCi> traverse (\x -> if odd x then Right x else Left x) (Branch (Branch Nil 1 Nil) 3 Nil)
+Right (Branch (Branch Nil 1 Nil) 3 Nil)
+GHCi> traverse (\x -> if odd x then Right x else Left x) (Branch (Branch Nil 1 Nil) 2 Nil)
+Left 2
+GHCi> sequenceA $ Branch (Branch Nil [1,2] Nil) [3] Nil
+[Branch (Branch Nil 1 Nil) 3 Nil,Branch (Branch Nil 2 Nil) 3 Nil]
+--}
+
+-- solution
+-- дерево (как и список) представляет коллекцию. Какую семантику аппликатива для дерева выбрать?
+
+```
+test
+
+```hs
+https://stepik.org/lesson/30428/step/15?unit=11045
+TODO
+{--
+Сделайте тип `Cmps`
+
+infixr 9 |.|
+newtype (|.|) f g a = Cmps { getCmps :: f (g a) }  deriving (Eq,Show) 
+
+представителем класса типов `Traversable` при условии, 
+что аргументы композиции являются представителями `Traversable`
+
+GHCi> sequenceA (Cmps [Just (Right 2), Nothing])
+Right (Cmps {getCmps = [Just 2,Nothing]})
+GHCi> sequenceA (Cmps [Just (Left 2), Nothing])
+Left 2
+--}
+
+-- solution
+
+```
+test
+
+## chapter 2.3, Законы и свойства класса Traversable
+
+https://stepik.org/lesson/31555/step/1?unit=11808
+
+- Законы Traversable: identity
+- Законы Traversable: composition
+- Гарантии, обеспечиваемые законами Traversable
+- Фантомные типы
+- Функтор Const
+- Реализации методов базовых классов по умолчанию: fmapDefault
+- Реализации методов базовых классов по умолчанию: foldmapDefault
+- Полное определение класса Traversable
+
+### 2.3.2
+```hs
+
+```
+repl
+
 
 
 grep `TODO` markers, fix it.

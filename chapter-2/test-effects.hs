@@ -17,7 +17,7 @@ import Data.Monoid (
     )
 
 import Control.Applicative (
-    Applicative(..), (<*>), (<$>)
+    Applicative(..), (<*>), (<$>), ZipList(..)
     )
 
 import Data.Foldable (
@@ -33,7 +33,8 @@ import Data.Traversable (
 import Prelude (
     show, read, String, Char, Functor, fmap, Bool, otherwise, Int,
     (==), (*), id, const, Maybe (..), null, ($), succ, (.), undefined, Num ((+)), Show, Eq,
-    foldr, foldl, Either (..), Monoid (..), Semigroup (..), putStrLn, print, (*), (>), (/)
+    foldr, foldl, Either (..), Monoid (..), Semigroup (..), putStrLn, print, (*), (>), (/), (^),
+    map
     )
 
 test = foldr (+) 0 [0..42]
@@ -75,3 +76,6 @@ test15 = traverse_ (\ x -> (show x, x*x)) [1, 2] -- ("12",())
 sequenceA2list :: (Foldable t, Applicative f) => t (f a) -> f [a]
 -- sequenceA2list = foldr (\ x y -> pure (:) <*> x <*> y) (pure [])
 sequenceA2list = foldr (\ x y -> ((:) <$> x) <*> y) (pure [])
+
+-- test16 = sequenceA (map ZipList [[11,21], [12,22], [13,23]])
+test16 = traverse ZipList [[11,21], [12,22], [13,23]]
