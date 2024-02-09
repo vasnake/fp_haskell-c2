@@ -1093,7 +1093,7 @@ https://stepik.org/lesson/31555/step/1?unit=11808
 - Реализации методов базовых классов по умолчанию: foldmapDefault
 - Полное определение класса Traversable
 
-### 2.3.2 Traverse identity law
+### 2.3.2 traverse identity law
 
 Есть шесть законов для траверсабл, по сути они похожи на законы для функтора,
 что не удивительно, учитывая их близкую природу
@@ -1141,7 +1141,7 @@ True
 ```
 repl
 
-### 2.3.3 Traverse composition law
+### 2.3.3 traverse composition law
 
 Закон композиции траверсов (идентичность траверсу композиции стрелок Клейсли)
 ```hs
@@ -1216,12 +1216,397 @@ ghci> :t  (fmap Right . Just)
 ```
 repl
 
-### 2.3.4
+### 2.3.4 Traversable laws, остальные (не столь важные)
+
+Выполнение законов дает некоторые гарантии `traverse`
+- посещает все узлы структуры
+- каждый узел посещается ровно 1 раз
+- реализация `pure` для аппликатива: тривиальна (без эффектов и вычислений)
+- не меняет структуру контейнера (клонирует контекст), хотя может выдать "пустой" контейнер,
+если аппликативный функтор реализует такой эффект (WHA?)
+
+`traverse` это по сути `fmap` но с эффектами, обеспечиваемыми аппликативными функторами.
+
+Остальные 4 закона для `Traversable`
 ```hs
+-- law #3, traverse naturality, free theorem
+-- если:
+t :: (Applicative f, Applicative g) => f a -> g a -- аппликативный гомоморфизм, со свойствами:
+t (pure x) = pure x
+t (x <*> y) = (t x) <*> (t y)
+-- то:
+t . traverse g = traverse (t . g) -- вынос t из траверса ничего не меняет
+
+-- оставшиеся три закона повторяют предыдущие законы, но для функции sequenceA
+sequenceA . fmap Identity = Identity                            -- identity
+sequenceA . fmap Compose = Compose . fmap sequenceA . sequenceA -- composition
+t . sequenceA = sequenceA . fmap t                              -- naturality
+-- эти законы фиксируют реализацию sequenceA через traverse (и наоборот),
+-- при правильной реализации, законы выполняются автоматически.
+```
+repl
+
+```hs
+https://stepik.org/lesson/31555/step/5?unit=11808
+TODO
+{--
+В предположении что обе части закона `composition` для `sequenceA`
+
+sequenceA . fmap Compose == Compose . fmap sequenceA . sequenceA
+
+имеют тип
+
+(Applicative f, Applicative g, Traversable t) => t (f (g a)) -> Compose f g (t a)
+
+укажите тип подвыражения `fmap sequenceA` в правой части. Контекст указывать не надо.
+--}
+
+-- solution
+
+```
+test
+
+```hs
+https://stepik.org/lesson/31555/step/6?unit=11808
+TODO
+{--
+Рассмотрим следующий тип данных
+
+data OddC a = Un a | Bi a a (OddC a) deriving (Eq,Show)
+
+Этот тип представляет собой контейнер-последовательность, который по построению может содержать только нечетное число элементов:
+
+GHCi> cnt1 = Un 42
+GHCi> cnt3 = Bi 1 2 cnt1
+GHCi> cnt5 = Bi 3 4 cnt3
+GHCi> cnt5
+Bi 3 4 (Bi 1 2 (Un 42))
+GHCi> cntInf = Bi 'A' 'B' cntInf
+GHCi> cntInf
+Bi 'A' 'B' (Bi 'A' 'B' (Bi 'A' 'B' (Bi 'A' 'B' (Bi 'A' 'B' (Bi 'A' 'B' (Bi 'A' 'B' (Bi 'A' 'B' (Bi 'A' 'B' (Bi 'A' 'B' (Bi 'A' 'Interrupted.
+GHCi>
+
+Сделайте этот тип данных представителем классов типов `Functor`, `Foldable` и `Traversable`:
+
+GHCi> (+1) <$> cnt5
+Bi 4 5 (Bi 2 3 (Un 43))
+GHCi> toList cnt5
+[3,4,1,2,42]
+GHCi> sum cnt5
+52
+GHCi> traverse (\x->[x+2,x-2]) cnt1
+[Un 44,Un 40]
+--}
+
+-- solution
+
+```
+test
+
+### 2.3.7 фантомные типы
+
+> A phantom type is a parameterised type whose parameters do not all appear on the right-hand side of its definitio
+https://wiki.haskell.org/Phantom_type
+
+Враппер дизайн-тайм для создания разных типов на базе одного.
+Чтобы тайп-чекер ловил нас за руку при попытки сложить килогрыммы и градусы.
+
+Мотивация: допустим мы работаем с температурой, выражаемой через число.
+чтобы не смешивать температуру с килограммами, выразим темп. через `newtype`.
+Но темп. у нас есть по фаренгейту и по цельсию ...
+```hs
+-- одно-параметрический конструктор типа, конструктор данных не-полиморфный
+newtype Temperature a = Temperature Double -- фантомный тип
+    deriving (Num, Show) -- https://ghc.gitlab.haskell.org/ghc/doc/users_guide/exts/newtype_deriving.html#extension-GeneralisedNewtypeDeriving
+-- `a` это фантомный тип, в правой части не появляется нигде
+
+data Celsius -- типы данных без контструкторов данных, не населенные типы (пустые множества, void)
+data Farenheit
+
+comfortTemperature :: Temperature Celsius
+comfortTemperature = Temperature 23
+
+c2f :: Temperature Celsius -> Temperature Farenheit
+c2f (Temperature c) = Temperature (1.8 * c + 32)
+```
+repl
+
+```hs
+https://stepik.org/lesson/31555/step/8?unit=11808
+TODO
+{--
+Расширьте интерфейс для работы с температурами из предыдущего видео
+Кельвинами
+и реализуйте функцию 
+
+k2c :: Temperature Kelvin -> Temperature Celsius
+
+обеспечивающую следующее поведение
+
+GHCi> k2c 0
+Temperature (-273.15)
+GHCi> k2c 0 == Temperature (-273.15)
+True
+GHCi> k2c 273.15
+Temperature 0.0
+--}
+newtype Temperature a = Temperature Double
+  deriving (Num,Show)
+
+data Celsius
+data Fahrenheit 
+
+comfortTemperature :: Temperature Celsius
+comfortTemperature = Temperature 23
+
+c2f :: Temperature Celsius -> Temperature Fahrenheit
+c2f (Temperature c) = Temperature (1.8 * c + 32)
+
+k2c :: Temperature Kelvin -> Temperature Celsius
+k2c = undefined
+
+-- solution
+
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
+newtype Temperature a = Temperature Double
+  deriving (Num,Show,Eq)
+
+data Celsius
+data Fahrenheit 
+data Kelvin 
+
+comfortTemperature :: Temperature Celsius
+comfortTemperature = Temperature 23
+
+c2f :: Temperature Celsius -> Temperature Fahrenheit
+c2f (Temperature c) = Temperature (1.8 * c + 32)
+
+k2c :: Double -> Temperature Celsius
+k2c k = Temperature (k - 273.15)
+
+```
+test
+
+### 2.3.9 фантомный тип `newtype Const c a`
+
+Ранее мы видели полезные примитивы: `Identity`, `Compose`.
+Посмотрим на еще один: `Const`
+```hs
+newtype Const c a = Const { getConst :: c } deriving (Eq, Show)
+-- фантомный тип (a), игнорирует второй параметр конструктора типа
+-- семантика похожа на семантику пары: лог есть а значения нет.
+
+ghci> Const 'z'
+Const {getConst = 'z'}
+ghci> :t Const 'z'
+    :: Const Char a
+ghci> :k Const
+Const :: * -> k -> *
+
+instance Functor (Const c) where -- связали первый параметр конструктора типов, обеспечили нужный kind
+    fmap :: (a -> b) -> Const c a -> Const c b -- сигнатура говорит, что меняется только фантомный тип
+    fmap _ (Const v) = Const v -- т.е. в функторе мы просто перевешиваем метку типа на константном значении
+
+ghci> fmap (^2) (Const 'z')
+    Const {getConst = 'z'} -- реализация игнорит функцию, только меняет тип ...
+ghci> :t fmap (^2) (Const 'z')
+    :: Num b => Const Char b -- да, появилось требование Num b
+ghci> :t Const 'z' -- у оригинала такого не было:
+    :: forall {k} {a :: k}. Const Char a
+
+ghci> :t fmap length (Const 'z') -- еще интереснее: теперь второй параметр нужен Int
+fmap length (Const 'z') :: Const Char Int
+-- меняем фантомный тип, по факту.
+
+instance Foldable (Const c) where
+    foldMap :: (Monoid m) => (a -> m) -> Const c a -> m
+    foldMap _ _ = mempty -- поскольку в "контейнере" нет значений `a` (только "лог"), то это поведение естественно
+
+instance (Monoid c) => Applicative (Const c) where
+    pure :: a -> Const c a
+    pure _ = Const mempty
+    (<*>) :: Const c (a -> b) -> Const c a -> Const c b -- a, b это фантомы, их нет
+    (<*>) (Const f) (Const v) = Const (mappend f v) -- семантика пары: (лог, _)
+
+ghci> pure 'z' :: Const [a] Char -- демо, аппликатив, укажем тип: где первый параметр это моноид (список)
+Const {getConst = []} -- переданный 'z' это значение фантомного типа, исчезло
+
+ghci> Const "ab" <*> Const "cd" -- вторые параметры фантомные, первые сконкатенированы в операторе `applied over'
+Const {getConst = "abcd"}
+
+instance Traversable (Const c) where
+    traverse :: (Applicative f) => (a -> f b) -> Const c a -> f (Const c b)
+    traverse _ (Const v) = pure (Const v) -- подняли в аппликатив и поменяли метку типа с `a` на `b`
+    -- по аналогии с функтором
+```
+repl
+
+### 2.3.10 `fmapDefault` для вывода Functor из Traversable
+
+В Хаскел можно провернуть интересный трюк:
+реализовать, скажем, `Traversable` для некоего типа, после чего для этого типа,
+реализации `Functor` и `Foldable` появятся автомагически.
+Посмотрим, как это возможно (спойлер: существует функция `fmapDefault`, реализующая `fmap`).
+А еще это возможно из-за ад-хок полиморфизма: в наличии инстансы с реализацией нужных методов.
+```hs
+class (Functor t, Foldable t) => Traversable t where
+    sequenceA :: Applicative f => t (f a) -> f (t a) -- "список" аппликативов преобразовать в аппликатив "списка"
+    sequenceA = traverse id
+    traverse :: Applicative f => (a -> f b) -> t a -> f (t b)
+    traverse = sequenceA . fmap
+
+data Result a = Error | Ok a deriving (Eq, Show, Functor, Foldable) -- sum-type, Maybe isomorph
+
+-- instance (Functor Result, Foldable Result) => Traversable Result where
+instance Traversable Result where
+    traverse :: (Applicative f) => (a -> f b) -> Result a -> f (Result b)
+    traverse _ Error = pure Error
+    traverse f (Ok x) = (pure Ok) <*> (f x)
+    -- traverse f (Ok x) = Ok <$> f x
+
+ghci> traverse (\x -> [x+10, x+20]) (Ok 5)
+[Ok 15,Ok 25]
+
+-- почему это возможно: fmapDefault
+
+fmapDefault :: (Traversable t) => (a -> b) -> t a -> t b -- fmap
+fmapDefault f = runIdentity . traverse (Identity . f) -- по сути, подняли ф в контекст траверсабла,
+-- мы уже видели, что траверсабл и функтор это близнецы-братья
+-- траверс должен был бы дать эффекты от ап.функтора, но айдентити не содержит эффектов, поэтому тут эффектов не будет,
+-- эквивалентно поведению функтора
+
+instance Functor Result where fmap = fmapDefault
+
+ghci> :t fmap -- для справки
+fmap :: Functor f => (a -> b) -> f a -> f b
+
+ghci> fmapDefault (^2) (Ok 5)
+Ok 25
+ghci> fmap (^2) (Ok 5)
+Ok 25
+
+-- фолдабл делается аналогично, см.
+ghci> :t foldMapDefault 
+foldMapDefault :: (Traversable t, Monoid m) => (a -> m) -> t a -> m
 
 ```
 repl
 
+### 2.3.11 `foldMapDefault` для вывода Foldable из Traversable
+
+Продолжим предыдущую тему. Как, имея траверсабл, сделать фолдабл?
+```hs
+-- для справки, Foldable реализуется через фолдмэп:
+ghci> :t foldMap
+foldMap :: (Foldable t, Monoid m) => (a -> m) -> t a -> m
+
+-- фолдабл делается через универсальную функцию, реализующую фолдМэп для траверсабла
+ghci> :t foldMapDefault 
+foldMapDefault :: (Traversable t, Monoid m) => (a -> m) -> t a -> m
+
+foldMapDefault f = getConst . traverse (Const . f) -- траверс требует аппликатив и использует его для построения цепочки
+-- поднимем ф в аппликатив, используем его эффекты как сумматор свертки
+
+-- как мы помним, аппликатив Конст сделан так:
+-- пюре дает пустой моноид; апплайд-овер дает конкатенацию моноидов, что и требуется
+instance (Monoid c) => Applicative (Const c) where
+    pure :: a -> Const c a
+    pure _ = Const mempty
+    <*> :: Const c (a -> b) -> Const c a -> Const c b -- a, b это фантомы, их нет
+    (<*>) (Const f) (Const v) = Const (mappend f v) -- семантика пары: (лог, _)
+
+instance Foldable Result where foldMap = foldMapDefault
+
+ghci> foldr (+) 37 (Ok 5)
+42
+```
+repl
+
+```hs
+https://stepik.org/lesson/31555/step/12?unit=11808
+TODO
+{--
+Сделайте двоичное дерево
+
+data Tree a = Nil | Branch (Tree a) a (Tree a)  deriving (Eq, Show)
+
+представителем класса типов `Traversable` таким образом, 
+чтобы обеспечить для `foldMapDefault` порядок обхода «postorder traversal»:
+
+GHCi> testTree = Branch (Branch (Branch Nil 1 Nil) 2 (Branch Nil 3 Nil)) 4 (Branch Nil 5 Nil)
+GHCi> foldMapDefault (\x -> [x]) testTree
+[1,3,2,5,4]
+--}
+import Data.Traversable (foldMapDefault)
+
+instance Foldable Tree where
+  foldMap = foldMapDefault
+
+instance Traversable Tree where
+  sequenceA = undefined
+
+-- solution
+-- надо либо traverse определять, либо sequenceA и fmap
+
+```
+test
+
+### 2.3.13 `sequence`, `mapM` в Traversable для монад
+
+Есть еще две функции класса траверсабл: sequence, mapM
+```hs
+class (Functor t, Foldable t) => Traversable t where
+    sequenceA :: Applicative f => t (f a) -> f (t a) -- "список" аппликативов преобразовать в аппликатив "списка"
+    sequenceA = traverse id
+    traverse :: Applicative f => (a -> f b) -> t a -> f (t b)
+    traverse = sequenceA . fmap
+
+-- вот они: видно, что жопа та же, только для контекста монады
+-- всякая монада является аппликативным функтором,
+-- не всякий аппликативный функтор можно расширить до монады
+
+    sequence :: (Monad m) => t (m a) -> m (t a)
+    sequence = sequenceA
+
+    mapM :: (Monad m) => (a -> m b) -> t a -> m (t b)
+    mapM = traverse
+
+-- эти функции были добавлены в Хаскел задолго до появления аппликатива,
+-- были сделаны свободными (вне класса) и требовали списка а не траверсабла
+```
+repl
+
+## chapter 2.4, Связь классов Monad и Applicative
+
+https://stepik.org/lesson/28881/step/1?unit=9913
+
+- Направление вычислений в цепочке
+- Цепочки вычислений и порядок эффектов: монады
+- Цепочки вычислений и порядок эффектов: аппликативные функторы
+- Applicative и Monad: отличия в работе с эффектами
+- Applicative как базовый класс для Monad
+- Монады: реализация методов Applicative по умолчанию
+- Монады: реализация метода Functor по умолчанию
+- Статус функции `fail`: настоящее и будущее
+
+### 2.4.2
+```hs
+https://stepik.org/lesson/28881/step/2?unit=9913
+
+-- extra
+
+($)     ::                      (a -> b) ->   a ->   b
+(<$>)   :: Functor     f  =>    (a -> b) -> f a -> f b
+(<*>)   :: Applicative f  =>  f (a -> b) -> f a -> f b
+(=<<)   :: Monad       m  =>  (a -> m b) -> m a -> m b
+
+(&)     ::                      a ->   (a -> b) ->   b  -- Data.Function
+(<&>)   :: Functor     f  =>  f a ->   (a -> b) -> f b  -- Control.Lens.Operators
+(<**>)  :: Applicative f  =>  f a -> f (a -> b) -> f b  -- Control.Applicative
+(>>=)   :: Monad       m  =>  m a -> (a -> m b) -> m b
+
+```
+repl
 
 
 grep `TODO` markers, fix it.

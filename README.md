@@ -18,9 +18,14 @@ grep `TODO` markers, fix it.
 > чистые функции только лишь производят вычисления, а функции с эффектами
 производят вычисления И/ИЛИ делают что-то еще. И вот это "что-то еще" и называется эффектами
 
+Надо учесть, что аппликативный функтор это вычисление с эффектами.
+Цепочка (пайплайн) таких вычислений может накапливать эффекты, но, в отличие от монад, не меняет "структуру контейнера".
+Два вычисления, образующих "пайплайн", в аппликативе не могут "взаимодействовать", а в монаде могут.
+https://stackoverflow.com/questions/23342184/difference-between-monad-and-applicative-in-haskell
+
 ## links
 
-- The standard Haskell libraries feature a number of type classes with algebraic or category-theoretic underpinnings https://wiki.haskell.org/Typeclassopedia#Introduction
+- The standard Haskell libraries feature a number of type classes with algebraic or category-theoretic underpinnings https://wiki.haskell.org/Typeclassopedia
 - Ninety-Nine Problems in Haskell https://stepik.org/course/101204/info
 - Pronunciation https://wiki.haskell.org/Pronunciation
 - hooogle https://hoogle.haskell.org/?hoogle=State&scope=set%3Ahaskell-platform
@@ -28,3 +33,7 @@ grep `TODO` markers, fix it.
 - Theorems for free / Philip Wadler https://people.mpi-sws.org/~dreyer/tor/papers/wadler.pdf
 - Real World Haskellby Bryan O'Sullivan, Don Stewart, and John Goerzen https://book.realworldhaskell.org/read/using-parsec.html
 - SKIing with Y*, Iota and Ackermann http://www.type.sh/?p=161
+- Monad vs Applicative https://stackoverflow.com/questions/23342184/difference-between-monad-and-applicative-in-haskell
+- GeneralizedNewtypeDeriving https://ghc.gitlab.haskell.org/ghc/doc/users_guide/exts/newtype_deriving.html#extension-GeneralisedNewtypeDeriving
+- phantom type https://wiki.haskell.org/Phantom_type
+- The Monad.Reader https://themonadreader.wordpress.com/

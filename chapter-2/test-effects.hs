@@ -6,6 +6,7 @@
 {-# HLINT ignore "Using foldr on tuple" #-}
 {-# HLINT ignore "Using maximum on tuple" #-}
 {-# HLINT ignore "Use print" #-}
+-- {-# LANGUAGE UndecidableInstances #-}
 
 module TestEffects where
 
@@ -13,8 +14,12 @@ import Text.Parsec (getParserState)
 import Data.Char (toLower)
 
 import Data.Monoid (
-    Sum(..), Product (..), Endo(..), appEndo, (<>), Dual(..), First(..)
+    Sum(..), Product(..), Endo(..), appEndo, (<>), Dual(..), First(..)
     )
+
+-- import Control.Monad.Identity ( Identity(..) )
+import Data.Functor.Identity ( Identity(..) )
+import Data.Functor.Compose ( Compose(..) )
 
 import Control.Applicative (
     Applicative(..), (<*>), (<$>), ZipList(..)
@@ -25,19 +30,15 @@ import Data.Foldable (
     )
 
 import Data.Traversable (
-    sequence, sequenceA, Traversable(..), traverse
+    sequence, sequenceA, Traversable(..), traverse, fmapDefault, foldMapDefault, mapM
     )
-
--- import Control.Monad.Identity ( Identity(..) )
-import Data.Functor.Identity ( Identity(..) )
-import Data.Functor.Compose ( Compose(..) )
 
 -- import GHC.Show (Show)
 -- import GHC.Base (Eq)
 import Prelude (
-    show, read, String, Char, Functor, fmap, Bool, otherwise, Int,
-    (==), (*), id, const, Maybe (..), null, ($), succ, (.), undefined, Num ((+)), Show, Eq,
-    foldr, foldl, Either (..), Monoid (..), Semigroup (..), putStrLn, print, (*), (>), (/), (^),
+    show, read, String, Char, Functor(..), fmap, Bool, otherwise, Int,
+    (==), (*), id, const, Maybe(..), null, ($), succ, (.), undefined, Num(..), Show, Eq,
+    foldr, foldl, Either(..), Monoid(..), Semigroup(..), putStrLn, print, (*), (>), (/), (^),
     map
     )
 
@@ -83,3 +84,39 @@ sequenceA2list = foldr (\ x y -> ((:) <$> x) <*> y) (pure [])
 
 -- test16 = sequenceA (map ZipList [[11,21], [12,22], [13,23]])
 test16 = traverse ZipList [[11,21], [12,22], [13,23]]
+
+newtype Const c a = Const { getConst :: c } deriving (Eq, Show)
+-- фантомный тип (a), игнорирует второй параметр конструктора типа
+
+instance Functor (Const m) where
+    -- fmap :: (a -> b) -> Const c a -> Const c b
+    fmap _ (Const v) = Const v
+
+instance Foldable (Const c) where
+    -- foldMap :: (Monoid m) => (a -> m) -> Const c a -> m
+    foldMap _ _ = mempty -- поскольку в "контейнере" нет значений `a` (только "лог"), то это поведение естественно
+
+instance (Monoid c) => Applicative (Const c) where
+    -- pure :: a -> Const c a
+    pure _ = Const mempty
+    -- <*> :: Const c (a -> b) -> Const c a -> Const c b -- a, b это фантомы, их нет
+    (<*>) (Const f) (Const v) = Const (mappend f v) -- семантика пары: (лог, _)
+
+instance Traversable (Const c) where
+    -- traverse :: (Applicative f) => (a -> f b) -> Const c a -> f (Const c b)
+    traverse _ (Const v) = pure (Const v) -- подняли в аппликатив и поменяли метку типа с `a` на `b`
+
+test17 = Const 'z'
+
+data Result a = Error | Ok a deriving (Eq, Show) -- sum-type, Maybe isomorph
+instance Functor Result where fmap = fmapDefault -- используя траверс
+instance Foldable Result where foldMap = foldMapDefault -- используя траверс
+
+instance Traversable Result where
+-- instance (Functor Result, Foldable Result) => Traversable Result where
+    -- traverse :: (Applicative f) => (a -> f b) -> Result a -> f (Result b)
+    traverse _ Error = pure Error
+    -- traverse f (Ok x) = (pure Ok) <*> (f x)
+    traverse f (Ok x) = Ok <$> f x
+
+test18 = traverse (\x -> [x+10, x+20]) (Ok 5)
