@@ -1,17 +1,18 @@
 -- {-# LANGUAGE TypeOperators #-} -- для разрешения `|.|` в качестве имени оператора над типами
 -- {-# LANGUAGE PolyKinds #-}
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
+
 {-# HLINT ignore "Use traverse_" #-}
 {-# HLINT ignore "Use sum" #-}
 {-# HLINT ignore "Using foldr on tuple" #-}
 {-# HLINT ignore "Using maximum on tuple" #-}
 {-# HLINT ignore "Use print" #-}
--- {-# LANGUAGE UndecidableInstances #-}
 
 module TestEffects where
 
 import Text.Parsec (getParserState)
 import Data.Char (toLower)
+import Data.Function ( (&) )
 
 import Data.Monoid (
     Sum(..), Product(..), Endo(..), appEndo, (<>), Dual(..), First(..)
@@ -20,9 +21,10 @@ import Data.Monoid (
 -- import Control.Monad.Identity ( Identity(..) )
 import Data.Functor.Identity ( Identity(..) )
 import Data.Functor.Compose ( Compose(..) )
+import Data.Functor ((<&>))
 
 import Control.Applicative (
-    Applicative(..), (<*>), (<$>), ZipList(..)
+    Applicative(..), (<*>), (<$>), ZipList(..), (<**>)
     )
 
 import Data.Foldable (
@@ -33,13 +35,15 @@ import Data.Traversable (
     sequence, sequenceA, Traversable(..), traverse, fmapDefault, foldMapDefault, mapM
     )
 
+import Control.Monad ( liftM )
+
 -- import GHC.Show (Show)
 -- import GHC.Base (Eq)
 import Prelude (
     show, read, String, Char, Functor(..), fmap, Bool, otherwise, Int,
     (==), (*), id, const, Maybe(..), null, ($), succ, (.), undefined, Num(..), Show, Eq,
     foldr, foldl, Either(..), Monoid(..), Semigroup(..), putStrLn, print, (*), (>), (/), (^),
-    map
+    map, (=<<), (>>=), return, flip, (++), fail, Ord(..)
     )
 
 test = foldr (+) 0 [0..42]
@@ -120,3 +124,12 @@ instance Traversable Result where
     traverse f (Ok x) = Ok <$> f x
 
 test18 = traverse (\x -> [x+10, x+20]) (Ok 5)
+
+(<***>) :: Applicative f => f a -> f (a -> b) -> f b
+(<***>) = flip (<*>)
+
+funM mv = mv >>= (\v -> if v > 0 then return (v ^ 2) else fail $ "got negative value: " ++ show v)
+
+funA :: (Applicative f, Num a, Ord a) => f a -> f a
+-- funA mv = pure (\x -> if x > 0 then x^2 else undefined) <*> mv
+funA mv = (\x -> if x > 0 then x^2 else undefined) <$> mv
