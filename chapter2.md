@@ -1718,6 +1718,34 @@ ghci> (*3) <**> (+) $ 2 -- цепочка развернулась: (2 *3) (+ 2)
 ```
 repl
 
+Пример, зачем это может быть нужно (спойлер: сделать DSL на минималках)
+```hs
+import Text.ParserCombinators.Parsec
+import Control.Applicative ((<**>))
+
+expr :: Parser Integer
+expr = natural <**> operator <*> natural <* eof
+
+natural :: Parser Integer
+natural = read <$> many1 digit
+
+operator :: Parser (Integer -> Integer -> Integer)
+operator = choice
+  [ (+) <$ char '+'
+  , (-) <$ char '-'
+  , (*) <$ char '*'
+  ]
+
+ghci> parseTest expr "2*2"
+4
+ghci> parseTest expr "3-2"
+1
+ghci> parseTest expr "1+2"
+3
+```
+repl
+
+
 ### 2.4.5 отличия аппликатива от монады (`<*>, >>=`)
 
 Посмотрели на пайплайны в монадах и в аппликативах.
@@ -2075,6 +2103,393 @@ https://stepik.org/lesson/30721/step/1?unit=11244
 - Использование MonadPlus: msum
 - Использование MonadPlus: mfilter
 
+### 2.5.2 class MonadPlus как расширение Alternative
+
+На языке парсера, аппликатив означал "применить и этот парсер и тот", тип "произведения".
+Альтернатив (расширение аппликатива) же значил "применить этот или тот". Тип "суммы".
+И были законы, наподобие дистрибутивности умножения над сложением.
+Законы для тайпкласса альтернатив это законы моноида (правая, левая единица, ассоциативность).
+
+А что насчет монад, как здесь обстоят дела с альтернативом?
+Для монад есть класс `MonadPlus`.
+Задача: добавить к тайпклассу монад дополнительную структуру - моноид.
+```hs
+-- ранее мы рассмотрели альтернатив
+class (Applicative f) => Alternative f where -- интерфейс моноидальной структуры
+    empty :: f a -- нейтральный элемент
+    (<|>) :: f a -> f a -> f a -- ассоциативная бинарная операция
+
+-- теперь посмотрим на производное: монадплюс
+class (Alternative m, Monad m) => MonadPlus m where
+    mzero :: m a
+    mzero = empty
+    mplus :: m a -> m a -> m a
+    mplus = (<|>)
+
+-- Рассмотрим инстансы тайпкласса монадплюс
+
+-- альтернатива для мейби это First реализация моноида: из цепочки выходит первый не-пустой
+instance Alternative Maybe where -- наложить ограничение на `a` мы не можем, класс не позволяет добавить параметр `a`
+    empty = Nothing
+    Nothing <|> r = r
+    l <|> _ = l
+-- без ограничений на `a` это единственная разумная реализация (First)
+-- первый не-пустой, органично ложится на тип-суммы (из двух конструкторов)
+ghci> Nothing <|> Just 3 <|> Just 5 <|> Nothing
+Just 3
+
+instance MonadPlus Maybe -- дефолтная реализация закрывает наши нужды
+
+ghci> Nothing `mplus` Just 3 `mplus` Just 5 `mplus` Nothing
+Just 3
+```
+repl
+
+### 2.5.3 `instance MonadPlus []`
+
+Не для всех типов монад есть возможность (или смысл) добавить моноидальную структуру.
+Для списка можно, будет хорошая иллюстрация: как аппликатив работает умножением а альтернатив работает сложением.
+```hs
+-- ранее рассматривали
+instance Alternative [] where -- реализация альтернативы для списка
+    empty = []
+    (<|>) = (++) -- список позволяет комбинировать: склеить два списка
+-- альтернатива для списка повторяет поведение моноида для списка
+
+-- теперь добавляется
+instance MonadPlus []
+
+-- examples
+
+ghci> [1,2,3] <|> [4,5] -- alternative
+[1,2,3,4,5] -- сумма (количества, 3+2), речь идет о "структуре контейнера", об эффектах
+-- эффект списка это количество элеентов
+
+ghci> [1,2,3] *> [4,5] -- applicative
+[4,5,4,5,4,5] -- произведение (количество, 3*2)
+
+ghci> [1,2,3] `mplus` [4,5] -- MonadPlus
+[1,2,3,4,5] -- сумма (количество 3+2)
+
+ghci> [1,2,3] >> [4,5] -- bind
+[4,5,4,5,4,5] -- произведение (количество, 3*2)
+
+-- практически всегда монадплюс имеет дефолтную реализацию через альтернатив
+```
+repl
+
+### 2.5.4 MonadPlus laws
+
+Так в чем заключается различие альтернатив и монадплюс?
+
+Альтернатив это моноид, добавленный к аппликативной структуре.
+Законы моноида + законы аппликатива (сложение, умножение, дистрибутивность)
+
+Монадплюс это монада с добавленным моноидным поведением.
+Соответственно, набор законов это отражает
+```hs
+-- 1. Left Zero
+mzero >>= k = mzero -- похоже на аппликативный закон: empty <*> a = empty
+
+-- 2. Right Zero
+v >> mzero = v
+
+-- вот эти законы выполняются не для всех инстансов монадплюс:
+-- другими словами: должен выполняться хотя бы один из этих двух законов
+
+-- 3. Left Distribution
+(a `mplus` b) >>= k = (a >>= k) `mplus` (b >>= k)
+
+-- 4. Left Catch Law
+(return a) `mplus` b = return a
+
+-- examples
+
+-- для списка №4 не выполняется
+ghci> return 2 `mplus` [1,3]
+[2,1,3]
+
+-- для мейби №4 выполняется
+ghci> return 2 `mplus` Just 3
+Just 2
+```
+repl
+
+Законы можно разделить на три вида:
+- законы формирования алгебраической структуры (must);
+- законы - свободные теоремы (следование ограничениям Хаскел);
+- законы - свойства, выводимые из ...
+
+Haskell не может проверить законы, следить за этим должен программист.
+
+Kmett:
+> MonadPlus is a stronger claim than Alternative, 
+which in turn is a stronger claim than Monoid, 
+and while the MonadPlus and Alternative instances for a type should be related, 
+the Monoid may be (and sometimes is) something completely different.
+https://stackoverflow.com/a/10168111
+
+```hs
+https://stepik.org/lesson/30721/step/5?unit=11244
+TODO
+{--
+Выполняются ли для стандартных представителей 
+`Applicative`, `Alternative`, `Monad` и `MonadPlus` 
+типа данных `Maybe` 
+следующие законы дистрибутивности: 
+
+(u <|> v) <*> w       =    u <*> w <|> v <*> w
+
+(u `mplus` v) >>= k   =    (u >>= k) `mplus` (v >>= k)
+
+Если нет, то приведите контрпример, если да, то доказательство.
+Предполагается, что расходимости отсутствуют.
+--}
+- Write an answer
+- Send your best submission to review
+- Review submissions
+- Wait for reviews of your solution
+- Get points, max score is 3 points 
+
+-- solution
+
+```
+test
+
+```hs
+https://stepik.org/lesson/30721/step/6?unit=11244
+TODO
+{--
+Предположим мы сделали парсер
+
+newtype PrsE a = PrsE { runPrsE :: String -> Either String (a, String) }
+
+представителем классов типов `Alternative` следующим образом
+
+instance Alternative PrsE where
+  empty = PrsE f where 
+    f _ = Left "empty alternative"
+  p <|> q = PrsE f where 
+    f s = let ps = runPrsE p s 
+      in if null ps 
+         then runPrsE q s 
+         else ps
+
+Эта реализация нарушает закон дистрибутивности для `Alternative`:
+
+GHCi> runPrsE ((charE 'A' <|> charE 'B') *> charE 'C') "ABC"
+Left "unexpected B"
+GHCi> runPrsE (charE 'A' *> charE 'C' <|> charE 'B' *> charE 'C') "ABC"
+Left "unexpected A"
+
+От какого парсера приходит сообщение об ошибке в первом и втором примерах?
+
+Select all correct options from the list
+(1) charE 'A'
+(1) charE 'B'
+(1) charE 'C'
+(2) charE 'A'
+(2) charE 'B'
+(2) левый charE 'C'
+(2) правый charE 'C'
+--}
+
+-- solution
+
+```
+test
+
+```hs
+https://stepik.org/lesson/30721/step/7?unit=11244
+TODO
+{--
+Реализуем улучшенную версию парсера PrsE
+
+newtype PrsEP a = PrsEP { runPrsEP :: Int -> String -> (Int, Either String (a, String)) }
+parseEP :: PrsEP a -> String -> Either String (a, String)
+parseEP p  = snd . runPrsEP p 0
+
+Этот парсер получил дополнительный целочисленный параметр в аргументе и в возвращаемом значении. 
+С помощью этого параметра мы сможем отслеживать и передвигать текущую позицию в разбираемой строке и 
+сообщать о ней пользователю в случае ошибки:
+
+GHCi> charEP c = satisfyEP (== c)
+GHCi> runPrsEP (charEP 'A') 0 "ABC"
+(1,Right ('A',"BC"))
+> runPrsEP (charEP 'A') 41 "BCD"
+(42,Left "pos 42: unexpected B")
+> runPrsEP (charEP 'A') 41 ""
+(42,Left "pos 42: unexpected end of input")
+
+Вспомогательная функция `parseEP` дает возможность вызывать парсер более удобным образом 
+по сравнению с `runPrsEP`, скрывая технические детали:
+
+GHCi> parseEP (charEP 'A') "ABC"
+Right ('A',"BC")
+GHCi> parseEP (charEP 'A') "BCD"
+Left "pos 1: unexpected B"
+GHCi> parseEP (charEP 'A') ""
+Left "pos 1: unexpected end of input"
+
+Реализуйте функцию 
+satisfyEP :: (Char -> Bool) -> PrsEP Char
+обеспечивающую описанное выше поведение.
+--}
+satisfyEP :: (Char -> Bool) -> PrsEP Char
+satisfyEP = undefined
+
+-- solution
+
+```
+test
+
+```hs
+https://stepik.org/lesson/30721/step/8?unit=11244
+TODO
+{--
+Сделайте парсер
+
+newtype PrsEP a = PrsEP { runPrsEP :: Int -> String -> (Int, Either String (a, String)) }
+parseEP :: PrsEP a -> String -> Either String (a, String)
+parseEP p  = snd . runPrsEP p 0
+
+представителем классов типов `Functor` и `Applicative`, обеспечив следующее поведение:
+
+GHCi> runPrsEP (pure 42) 0 "ABCDEFG"
+(0,Right (42,"ABCDEFG"))
+GHCi> charEP c = satisfyEP (== c)
+GHCi> anyEP = satisfyEP (const True)
+GHCi> testP = (,) <$> anyEP <* charEP 'B' <*> anyEP
+GHCi> runPrsEP testP 0 "ABCDE"
+(3,Right (('A','C'),"DE"))
+GHCi> parseEP testP "BCDE"
+Left "pos 2: unexpected C"
+GHCi> parseEP testP ""
+Left "pos 1: unexpected end of input"
+GHCi> parseEP testP "B"
+Left "pos 2: unexpected end of input"
+--}
+
+-- solution
+
+```
+test
+
+```hs
+https://stepik.org/lesson/30721/step/9?unit=11244
+TODO
+{--
+Сделайте парсер
+
+newtype PrsEP a = PrsEP { runPrsEP :: Int -> String -> (Int, Either String (a, String)) }
+parseEP :: PrsEP a -> String -> Either String (a, String)
+parseEP p  = snd . runPrsEP p 0
+
+представителем класса типов `Alternative`, 
+обеспечив следующее поведение для пары неудачных альтернатив: 
+сообщение об ошибке возвращается из той альтернативы, которой удалось распарсить входную строку глубже.
+
+GHCi> runPrsEP empty 0 "ABCDEFG"
+(0,Left "pos 0: empty alternative")
+GHCi> charEP c = satisfyEP (== c)
+GHCi> tripleP [a,b,c] = (\x y z -> [x,y,z]) <$> charEP a <*> charEP b <*>  charEP c
+GHCi> parseEP (tripleP "ABC" <|> tripleP "ADC") "ABE"
+Left "pos 3: unexpected E"
+GHCi> parseEP (tripleP "ABC" <|> tripleP "ADC") "ADE"
+Left "pos 3: unexpected E"
+GHCi> parseEP (tripleP "ABC" <|> tripleP "ADC") "AEF"
+Left "pos 2: unexpected E"
+--}
+
+-- solution
+
+```
+test
+
+### 2.5.10 guard (Alternative)
+
+В чем польза монадплюс (Alternative)?
+В облегчении кодирования некоторых операций
+```hs
+guard :: MonadPlus m => Bool -> m () -- было
+guard :: Alternative f => Bool -> f () -- стало (более слабое ограничение)
+guard True = pure () -- return () -- юнит-тайп, контейнер (контекст) непустой
+guard False = empty -- mzero, контейнер (контекст) пустой, закон Left Zero здесь зануляет следующие стрелки Клейсли
+-- гард в монадическом вычислении либо зануляет следующие шаги пайплайна, либо пропускает без изменений
+
+-- 1. Left Zero
+mzero >>= k = mzero -- похоже на аппликативный закон: empty <*> a = empty
+
+pythags = do
+    z <- [1 ..]
+    x <- [1 .. z]
+    y <- [x .. z]
+    guard (x^2 + y^2 == z^2) -- управление эффектами на основе булева значения
+    -- для списка будет эффект одного элемента или пустого списка
+    return (x, y, z)
+
+ghci> take 5 pythags 
+[(3,4,5),(6,8,10),(5,12,13),(9,12,15),(8,15,17)]
+
+-- если засахарить, то вот так:
+pythags = [(x,y,z) | z <- [1..], x <- [1..z], y <- [x..z], x^2 + y^2 == z^2]
+```
+repl
+
+### 2.5.11 asum (Alternative)
+
+Следующая полезная вещь: свертка на моноидной структуре,
+есть целый набор подобных функций
+```hs
+
+-- для моноидов
+
+mconcat :: Monoid m => [m] -> m
+mconcat = foldr mappend mempty
+
+fold :: (Foldable t, Monoid m) => t m -> m
+fold = foldr mappend mempty
+
+-- для монадплюс
+
+msum :: (Foldable t, MonadPlus m) => t m -> m
+msum = asum -- стало (более общая, слабее ограничение)
+msum = foldr mplus mzero -- было
+
+asum :: (Foldable t, Alternative f) => t (f a) -> f a
+asum = foldr (<|>) empty -- пользуйтесь asum, это более современное и правильное средство
+
+-- examples
+
+-- фолдабл это список, альтернатив это мейби
+ghci> msum [Nothing, Just 3, Just 5, Nothing]
+Just 3
+```
+repl
+
+### 2.5.12 mfilter (MonadPlus)
+
+Еще одна полезная вешь (в монадплюс или альтернатив):
+на основе предиката влияет на пайплайн (похоже на guard)
+```hs
+mfilter :: MonadPlus m => (a -> Bool) -> m a -> m a
+mfilter p ma = do
+    a <- ma
+    if p a
+    then return a
+    else mzero
+
+ghci> mfilter (> 3) (Just 4)
+Just 4
+ghci> mfilter (> 3) (Just 3)
+Nothing
+
+mfilter меняет структуру контейнера на основе значений из контенера,
+такое поведение доступно только в монаде,
+поэтому в альтернатив поднять эту функцию нельзя
+
+```
+repl
 
 
 

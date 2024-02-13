@@ -24,18 +24,18 @@ import Data.Functor.Compose ( Compose(..) )
 import Data.Functor ((<&>))
 
 import Control.Applicative (
-    Applicative(..), (<*>), (<$>), ZipList(..), (<**>)
+    Applicative(..), (<*>), (<$>), ZipList(..), (<**>), (<|>)
     )
 
 import Data.Foldable (
-    Foldable(..), fold, foldMap, maximum, sequenceA_, sequence_, traverse_
+    Foldable(..), fold, foldMap, maximum, sequenceA_, sequence_, traverse_, msum
     )
 
 import Data.Traversable (
     sequence, sequenceA, Traversable(..), traverse, fmapDefault, foldMapDefault, mapM
     )
 
-import Control.Monad ( liftM )
+import Control.Monad ( liftM, mplus, guard, mfilter )
 
 -- import GHC.Show (Show)
 -- import GHC.Base (Eq)
@@ -43,7 +43,7 @@ import Prelude (
     show, read, String, Char, Functor(..), fmap, Bool, otherwise, Int,
     (==), (*), id, const, Maybe(..), null, ($), succ, (.), undefined, Num(..), Show, Eq,
     foldr, foldl, Either(..), Monoid(..), Semigroup(..), putStrLn, print, (*), (>), (/), (^),
-    map, (=<<), (>>=), return, flip, (++), fail, Ord(..)
+    map, (=<<), (>>=), return, flip, (++), fail, Ord(..), (>>), take
     )
 
 test = foldr (+) 0 [0..42]
@@ -133,3 +133,17 @@ funM mv = mv >>= (\v -> if v > 0 then return (v ^ 2) else fail $ "got negative v
 funA :: (Applicative f, Num a, Ord a) => f a -> f a
 -- funA mv = pure (\x -> if x > 0 then x^2 else undefined) <*> mv
 funA mv = (\x -> if x > 0 then x^2 else undefined) <$> mv
+
+test19 = Nothing <|> Just 3 <|> Just 5 <|> Nothing
+test20 = Nothing `mplus` Just 3 `mplus` Just 5 `mplus` Nothing
+
+pythags = do 
+    z <- [1 ..]
+    x <- [1 .. z]
+    y <- [x .. z]
+    guard (x^2 + y^2 == z^2)
+    return (x, y, z)
+
+pythagsL = [(x,y,z) | z <- [1..], x <- [1..z], y <- [x..z], x^2 + y^2 == z^2]
+test21 = msum [Nothing, Just 3, Just 5, Nothing]
+test22 = mfilter (>3) (Just 4)
