@@ -37,3 +37,5 @@ https://stackoverflow.com/questions/23342184/difference-between-monad-and-applic
 - GeneralizedNewtypeDeriving https://ghc.gitlab.haskell.org/ghc/doc/users_guide/exts/newtype_deriving.html#extension-GeneralisedNewtypeDeriving
 - phantom type https://wiki.haskell.org/Phantom_type
 - The Monad.Reader https://themonadreader.wordpress.com/
+- Alternative and MonadPlus https://en.wikibooks.org/wiki/Haskell/Alternative_and_MonadPlus
+- MonadPlus and Monoid serve different purposes https://stackoverflow.com/questions/10167879/distinction-between-typeclasses-monadplus-alternative-and-monoid
