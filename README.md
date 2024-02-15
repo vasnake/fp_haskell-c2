@@ -41,3 +41,4 @@ https://stackoverflow.com/questions/23342184/difference-between-monad-and-applic
 - MonadPlus and Monoid serve different purposes https://stackoverflow.com/questions/10167879/distinction-between-typeclasses-monadplus-alternative-and-monoid
 - Скандальная правда об обработке исключений в Haskell https://eax.me/haskell-exceptions/
 - Haskell mini-patterns handbook https://kowainik.github.io/posts/haskell-mini-patterns
+- The Continuation Monad https://www.haskellforall.com/2012/12/the-continuation-monad.html

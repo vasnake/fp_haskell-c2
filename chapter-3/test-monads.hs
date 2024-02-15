@@ -1,5 +1,6 @@
 -- {-# LANGUAGE TypeOperators #-} -- для разрешения `|.|` в качестве имени оператора над типами
 -- {-# LANGUAGE PolyKinds #-}
+-- {-# LANGUAGE InstanceSigs #-}
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 {-# OPTIONS_GHC -Wno-noncanonical-monad-instances #-}
 {-# OPTIONS_GHC -Wno-noncanonical-monoid-instances #-}
@@ -36,7 +37,7 @@ import Data.Traversable (
     sequence, sequenceA, Traversable(..), traverse, fmapDefault, foldMapDefault, mapM
     )
 
-import Control.Monad ( liftM, mplus, guard, mfilter, ap, guard, MonadPlus(..) )
+import Control.Monad ( liftM, mplus, guard, mfilter, ap, guard, MonadPlus(..), when )
 -- import Control.Monad (liftM, ap, MonadPlus(..), guard, msum)
 -- import Control.Applicative (Alternative(..))
 
@@ -146,3 +147,16 @@ example0 x y = action `catchE` handler where
 --}
 
 test1 = runExcept $ msum [5 /? 0, 7 /? 0, 2 /? 0]
+
+square :: Int -> (Int -> r) -> r
+square x c = c (x ^ 2)
+
+add :: Int -> Int -> (Int -> r) -> r
+add x y c = c (x + y)
+
+sumSquares x y c = 
+    square x $ \x2 -> 
+    square y $ \y2 -> 
+    add x2 y2 $ \ss -> -- тут мы видим некотурую нелинейность
+    c ss
+-- напоминает do-нотацию монады, не так ли?

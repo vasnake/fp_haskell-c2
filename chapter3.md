@@ -499,6 +499,255 @@ https://stepik.org/lesson/30723/step/1?unit=11811
 - Стандартный интерфейс Cont: функция callCC
 - Реализация callCC
 
+### 3.2.2 Continuation Passing Style, CPS
+
+Нас интересует монада Continuation, для управления продолжением вычислений.
+Чтобы понять, как это, надо разобраться с Continuation Passing Style,
+стиль передачи продолжений.
+По сути, это композиция функций, когда внутренняя функция явно принимает враппер в виде аргумента.
+Можно смотреть на это как на передачу callback функции в вычисление.
+
+Если прищурится, можно разглядеть, как CPS позволяет создавать DSL (Domain Specific Language)
+```hs
+-- сетап
+{-# LANGUAGE InstanceSigs #-}
+import Control.Monad ( when )
+
+-- возьмем две обычные функции (square, add)
+square :: Int -> Int
+square x = x ^ 2
+
+add :: Int -> Int -> Int
+add x y = x + y
+
+-- превратим их в CPS
+
+-- функция принимает некий дополнительный аргумент
+-- WIP:
+
+square :: Int -> (Int -> r) -> ?
+square x c = x ^ 2
+
+add :: Int -> Int -> (Int -> r) -> ?
+add x y c = x + y
+
+-- этот аргумент применяется к результату
+
+square :: Int -> (Int -> r) -> r
+square x c = c (x ^ 2)
+
+add :: Int -> Int -> (Int -> r) -> r
+add x y c = c (x + y)
+
+-- получаем механизм типа коллбеков, или, с другой стороны, композицию функций
+
+-- examples
+
+ghci> square 2 id
+4
+ghci> square 2 show
+"4"
+ghci> add 2 3 print
+5
+
+-- а что если передать в качестве конт. еще один конт?
+ghci> :t square 2 square
+square 2 square :: (Int -> r) -> r -- нужно скормить в выражение еще одну (терминирующую) функцию, чтобы получить результат
+
+ghci> square 2 square id
+16
+
+ghci> square 2 (add 3) (add 5) id
+12 -- 2^2 + 3 + 5
+
+-- получаем композицию функций но в стиле CPS
+
+```
+repl
+
+```hs
+https://stepik.org/lesson/30723/step/3?unit=11811
+TODO
+{--
+CPS-преобразование часто применяют для создания предметно-ориентированных языков (DSL).
+https://ru.wikipedia.org/wiki/Предметно-ориентированный_язык
+
+Реализуйте комбинаторы, которые позволят записывать числа вот в таком забавном формате:
+
+GHCi> decode one hundred twenty three as a number
+123
+GHCi> decode one hundred twenty one as a number
+121
+GHCi> decode one hundred twenty as a number
+120
+GHCi> decode one hundred as a number
+100
+GHCi> decode three hundred as a number
+300
+GHCi> decode two thousand seventeen as a number
+2017
+
+Достаточно чтобы работали всякие простые случаи, как в примерах; 
+не старайтесь поддержать прямо все допустимые варианты, это потребует несколько бóльших усилий.
+--}
+decode = undefined
+as = undefined
+a = undefined
+number = undefined
+
+one = undefined
+two = undefined
+three = undefined
+seventeen = undefined
+twenty = undefined
+hundred = undefined
+thousand = undefined
+
+-- solution
+
+```
+test
+
+### 3.2.4 нелинейный пайплайн в CPS
+
+Как насчет менее прямолинейных пайплайнов?
+```hs
+-- имея две такие функции
+square :: Int -> (Int -> r) -> r
+square x c = c (x ^ 2)
+add :: Int -> Int -> (Int -> r) -> r
+add x y c = c (x + y)
+
+-- напишем функцию суммы квадратов в CPS
+
+sumSquares :: Int -> Int -> (Int -> r) -> r
+sumSquares x y c = square x cont1 where
+    cont1 x2 = square y cont2 where
+        cont2 y2 = add x2 y2 cont3 where
+            cont3 ss = c ss
+
+-- отрефакторим немного
+sumSquares x y c = square x (\x2 -> square y (\y2 -> add x2 y2 (\ss -> c ss)))
+-- и еще немного
+sumSquares x y c = 
+    square x $ \x2 -> 
+    square y $ \y2 -> 
+    add x2 y2 $ \ss -> -- тут мы видим некотурую нелинейность
+    c ss
+-- напоминает do-нотацию монады, не так ли?
+
+ghci> sumSquares 3 4 show
+"25"
+```
+repl
+
+### 3.2.5 newtype Cont
+
+Как могло бы выглядеть применение монады Cont, примеры
+```hs
+newtype Cont r a = Cont { runCont :: (a -> r) -> r }
+evalCont :: Cont r r -> r -- удобный враппер терминирования конт. на функции id (гарантирует совпадение типа а с типом эр)
+evalCont m = runCont m id
+
+-- забегая вперед (монаду мы еще не определили),
+-- как будут выглядеть вычисления в этой монаде Cont
+
+square :: Int -> Cont r Int
+square x = return $ x ^ 2
+
+add :: Int -> Int -> Cont r Int
+add x y = return $ x + y
+
+-- сумма квадратов CPS в ду-нотации
+sumSquares :: Int -> Int -> Cont r Int
+sumSquares x y = do
+    x2 <- square x
+    y2 <- square y
+    ss <- add x2 y2
+    return ss
+-- сравните с безмонадным CPS
+sumSquares x y c = 
+    square x $ \x2 -> 
+    square y $ \y2 -> 
+    add x2 y2 $ \ss -> -- тут мы видим некотурую нелинейность
+    c ss
+
+runCont (square 2) show -- "4"
+evalCont (square 2) -- 4
+evalCont (square 2 >>= (add 3) >>= (add 5)) -- 12
+evalCont $ sumSquares 3 4 -- 25
+```
+repl
+
+```hs
+https://stepik.org/lesson/30723/step/6?unit=11811
+TODO
+{--
+Реализуйте функцию `showCont`, запускающую вычисление и возвращающую его результат в виде строки.
+--}
+showCont :: Show a => Cont String a -> String
+showCont = undefined
+
+-- solution
+
+```
+test
+
+### 3.2.7 Monad Cont
+
+Реализуем монаду Cont (return, bind).
+Композиция "продолжений", реализованных через лямбды.
+
+Интересно, что тут надо считать "эффектом"? Вероятно, незавершенность вычисления, ленивость.
+А может, недетерминированность вычисления?
+```hs
+newtype Cont r a = Cont { runCont :: (a -> r) -> r }
+evalCont :: Cont r r -> r -- удобный враппер терминирования конт. на функции id (гарантирует совпадение типа а с типом эр)
+evalCont m = runCont m id
+
+instance Monad (Cont r) where
+    return :: a -> Cont r a
+    return x = Cont (\c -> c x) -- монада над стрелочным типом, поэтому лямбда
+
+    (>>=) :: Cont r a -> (a -> Cont r b) -> Cont r b -- m bind k: монада бинд стрелкаКлейсли, на выходе монада
+    (Cont v) >>= k = Cont (\c -> v (\a -> runCont (k a) c)) -- лямбды, ибо работаем со стрелочным типом
+    -- нам должны дать конт. си, тогда мы запустим вычисление `v (...)`
+    -- в котором нам должны дать аргумент для стрелкаКлейсли
+
+-- распишем как выглядит байнд после распаковки враппера Cont
+-- ((a -> r) -> r) -- левый параметр, монада
+-- (a -> (b -> r) -> r) -- правый параметр, стрелка Клейсли
+-- (b -> r) -> r -- возвращаемое значение, монада
+bind :: ((a -> r) -> r) -> (a -> (b -> r) -> r) -> (b -> r) -> r
+bind v k = \c -> -- лямбда ибо возвращаемое значение `(b -> r) -> r`
+    v (\a -> k a c) -- вторая лямбда, ибо связываем два вычисления
+    -- переданный снаружи конт. идет вторым параметром стрелки клейсли
+-- по факту, байнд это функция трех аргументов, третий: тот самый конт. который мы ждем:
+-- (b -> r) -- id или show в наших примерах
+bind v k c = v (\a -> k a c)
+-- стрелка Клейсли `(a -> (b -> r) -> r)`
+-- это по типу `a -> r` и это именно то, чего ждет в первом параметре наша монада в левой части, `v`
+-- таким образом, континуэйшены образуют некую матрешку, выполнение которой идет сверху вниз (слева-направо),
+-- когда результат левого вычисления передается в стрелку, данную в виде параметра
+-- т.е. из-за лямбд, вычисления справа (по ходу записи выражений), откладываются на "потом", после выполнения выражений слева.
+
+```
+repl
+
+> Computations which can be interrupted and resumed.
+... manipulation of the continuation functions can achieve complex manipulations of the future of the computation, 
+such as interrupting a computation in the middle, 
+aborting a portion of a computation, 
+restarting a computation, and interleaving execution of computations ...
+Many algorithms which require continuations in other languages do not require them in Haskell, due to Haskell's lazy semantics
+
+### 3.2.8
+https://stepik.org/lesson/30723/step/8?unit=11811
+```hs
+
+```
+repl
+
 
 
 grep `TODO` markers, fix it.
