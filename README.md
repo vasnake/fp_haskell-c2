@@ -42,3 +42,7 @@ https://stackoverflow.com/questions/23342184/difference-between-monad-and-applic
 - Скандальная правда об обработке исключений в Haskell https://eax.me/haskell-exceptions/
 - Haskell mini-patterns handbook https://kowainik.github.io/posts/haskell-mini-patterns
 - The Continuation Monad https://www.haskellforall.com/2012/12/the-continuation-monad.html
+- Монада ContT в картинках (Haskell) https://habr.com/ru/articles/149174/
+- How and why does the Haskell Cont monad work? https://stackoverflow.com/questions/3322540/how-and-why-does-the-haskell-cont-monad-work
+- Continuation passing style https://en.wikibooks.org/wiki/Haskell/Continuation_passing_style
+- The Evolution of a Haskell Programmer https://willamette.edu/~fruehr/haskell/evolution.html

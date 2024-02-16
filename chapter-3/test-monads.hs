@@ -11,11 +11,13 @@
 {-# HLINT ignore "Using maximum on tuple" #-}
 {-# HLINT ignore "Use print" #-}
 {-# HLINT ignore "Use let" #-}
+{-# HLINT ignore "Redundant return" #-}
+{-# HLINT ignore "Redundant bracket" #-}
 
 module TestMonads where
 
-import Text.Parsec (getParserState)
-import Data.Char (toLower)
+import Text.Parsec ( getParserState )
+import Data.Char ( toLower, toUpper )
 import Data.Function ( (&) )
 
 import Data.Monoid (
@@ -43,6 +45,10 @@ import Control.Monad ( liftM, mplus, guard, mfilter, ap, guard, MonadPlus(..), w
 -- import Control.Monad (liftM, ap, MonadPlus(..), guard, msum)
 -- import Control.Applicative (Alternative(..))
 
+import Control.Monad.Trans.Reader
+import Control.Monad.Trans.Writer
+import Control.Monad.Trans ( lift )
+
 -- import GHC.Show (Show)
 -- import GHC.Base (Eq)
 import Prelude (
@@ -50,7 +56,7 @@ import Prelude (
     (==), (*), id, const, Maybe(..), null, ($), succ, (.), undefined, Num(..), Show, Eq,
     foldr, foldl, Either(..), Monoid(..), Semigroup(..), putStrLn, print, (*), (>), (/), (^),
     map, (=<<), (>>=), return, flip, (++), fail, Ord(..), (>>), take, Monad(..),
-    Double, either, Integer
+    Double, either, Integer, head, tail
     )
 
 newtype Except e a = Except { runExcept :: Either e a } deriving Show
@@ -211,3 +217,45 @@ test2 x = callCC (\k -> do
 -- callCC :: ((a -> m b) -> m a) -> m a 
 callCC :: ((a -> Cont r b) -> Cont r a) -> Cont r a
 callCC f = Cont (\c -> runCont (f (\a -> Cont (\_ -> c a))) c)
+
+-- будем решать задачу объединения ридера и врайтера
+-- эффект ридера, читает второй элемент из списка (строк    )
+secondElem :: Reader [String] String
+secondElem = do
+    el2 <- asks ((map toUpper) . head . tail)
+    return el2
+
+strings = ["ab", "cd", "fg"]
+
+logFirst :: [String] -> Writer String String
+logFirst xs = do
+    let el1 = head xs
+    let el2 = ((map toUpper) . head . tail) xs
+    tell el1
+    return el2
+-- runWriter (logFirst strings)
+
+logFirstAndRetSecond :: 
+    ReaderT [String]    -- трансформер, внешняя монада
+    (Writer String)     -- внутренняя монада
+    String              -- возвращаемый композицией тип
+logFirstAndRetSecond = do
+    el1 <- asks head
+    el2 <- asks (map toUpper . head . tail)
+    lift (tell el1) -- подъем из внутренней монады
+    -- можно читать как "поднять API внутренней монады"
+    return el2
+
+type MyRW = ReaderT [String] (Writer String)
+
+logFirstAndRetSecond' :: MyRW String
+logFirstAndRetSecond' = do
+    el1 <- asks head
+    el2 <- asks (map toUpper . head . tail)
+    lift (tell el1) -- подъем из внутренней монады -- можно читать как "поднять API внутренней монады"
+    return el2
+
+-- утилита запуска
+runMyRW :: MyRW a -> [String] -> (a, String)
+runMyRW rw e = runWriter (runReaderT rw e)
+-- runMyRW logFirstAndRetSecond strings

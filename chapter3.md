@@ -1033,6 +1033,473 @@ https://stepik.org/lesson/31556/step/1?unit=11810
 - Трансформированная монада – это монада
 - Стандартные монады – это трансформеры
 
+### 3.3.2 два вычисления с разными эффектами
+
+Аппликативные функторы и монады позволяют выполнять вычисления с эффектами.
+Что делать, если эффектов нам надо несколько?
+К примеру, записывать в лог, обрабатывать исключения, хранить состояние, читать окружение, делать IO, ...
+
+В случае с Ап.функторами хорошо работает композиция: композиция двух аппликативов это аппликатив, см. Compose.
+
+С монадами сложнее, композиция монад (в общем случае) не будет монадой.
+Слишком сложная структура и поведение (зависимость структуры от вычислений).
+
+Есть обходные пути, один из них: трансформер монад.
+
+Подготовим песочницу для разбора трансформеров.
+Подготовим два вычисления с разными эффектами.
+Вернее, вычисление одно (вернуть второй элемент списка), но эффекты разные.
+```hs
+-- transformers, setup
+import Control.Monad.Trans.Reader
+import Control.Monad.Trans.Writer
+import Control.Monad.Trans (lift)
+
+-- будем решать задачу объединения ридера и врайтера
+
+-- эффект ридера, читает второй элемент из списка (строк)
+secondElem :: Reader [String] String
+secondElem = do
+    el2 <- asks ((map toUpper) . head . tail)
+    return el2
+
+strings = ["ab", "cd", "fg"]
+
+ghci> runReader secondElem strings -- читаем из "окружения"
+"CD"
+
+-- эффект врайтер, возвращает воторой элемент из списка, в лог пишет первый элемент
+logFirst :: [String] -> Writer String String
+logFirst xs = do
+    let el1 = head xs
+    let el2 = ((map toUpper) . head . tail) xs
+    tell el1
+    return el2
+
+ghci> runWriter (logFirst strings) -- читаем из параметра
+("CD","ab")
+
+-- теперь мы хотим два эффекта соединить:
+-- писать в лог первый элемент, возвращать второй,
+-- при этом читать данные не из параметра, а из "окружения", как ридер
+```
+repl
+
+### 3.3.3 композиция монад через трансформер
+
+Одна монада (врайтер) объявляется внутренней.
+Вторая (ридер) объявляется трансформером (суффикс T).
+```hs
+logFirstAndRetSecond :: 
+    ReaderT [String]    -- трансформер, внешняя монада
+    (Writer String)     -- внутренняя монада
+    String              -- возвращаемый композицией тип
+logFirstAndRetSecond = do
+    el1 <- asks head
+    el2 <- asks (map toUpper . head . tail)
+    lift (tell el1) -- подъем из внутренней монады
+    -- можно читать как "поднять API внутренней монады"
+    return el2
+
+-- Как этим пользоваться?
+
+-- одно-параметрический тип, годится для подстановки в трансформер
+ghci> :k Writer String
+Writer String :: * -> *
+
+-- эволюция кайндов
+ghci> :k Reader
+Reader :: * -> * -> * -- двух-параметрический
+ghci> :k Reader [String]
+Reader [String] :: * -> * -- одно-параметрический
+ghci> :k ReaderT [String]
+ReaderT [String] :: (* -> *) -> * -> * -- двух-параметрический, конструктор монады
+-- принимает монаду `(* -> *)`
+-- и возвращает монаду `* -> *`
+ghci> :k ReaderT [String] (Writer String)
+ReaderT [String] (Writer String) :: * -> * -- одно-параметрический, монада
+
+-- как это запускать?
+ghci> :t runReaderT
+runReaderT :: ReaderT r m a -> r -> m a
+-- ReaderT r m a -- три параметра для трансформера: окружение, внутренняя монада, возвращаемое значение (внутреннюю монаду)
+
+ghci> :t runReaderT logFirstAndRetSecond -- первый параметр передан, хочет второй и вернет врайтер (внутреннюю монаду)
+runReaderT logFirstAndRetSecond :: [String] -> Writer String String
+
+ghci> :t runWriter (runReaderT logFirstAndRetSecond strings)
+  :: (String, String)
+
+ghci> runWriter (runReaderT logFirstAndRetSecond strings) -- окружение передано снаружи
+("CD","ab")
+```
+repl
+
+```hs
+https://stepik.org/lesson/31556/step/4?unit=11810
+TODO
+{--
+Перепишите функцию `logFirstAndRetSecond` из предыдущего видео, 
+используя трансформер `WriterT` из модуля `Control.Monad.Trans.Writer` библиотеки `transformers`, и 
+монаду `Reader` в качестве базовой.
+
+GHCi> runReader (runWriterT logFirstAndRetSecond) strings
+("DEFG","abc")
+--}
+logFirstAndRetSecond :: ??
+logFirstAndRetSecond = undefined
+
+-- solution
+
+```
+test
+
+```hs
+https://stepik.org/lesson/31556/step/5?unit=11810
+TODO
+{--
+Реализуйте функцию 
+separate :: (a -> Bool) -> (a -> Bool) -> [a] -> WriterT [a] (Writer [a]) [a]
+
+Эта функция принимает два предиката и список и 
+записывает в один лог элементы списка, удовлетворяющие первому предикату, 
+в другой лог — второму предикату, 
+а возвращающает список элементов, ни одному из них не удовлетворяющих.
+
+GHCi> (runWriter . runWriterT) $ separate (<3) (>7) [0..10]
+(([3,4,5,6,7],[0,1,2]),[8,9,10])
+--}
+separate :: (a -> Bool) -> (a -> Bool) -> [a] -> WriterT [a] (Writer [a]) [a]
+separate = undefined
+
+-- solution
+
+```
+test
+
+### 3.3.6 удобная обвязка композиции в трансформере
+
+Из трансформера вышел сложный интерфейс, мы хотим его замаскировать.
+Сделаем вид, что у нас есть монада `MyRW`
+```hs
+ghci> runWriter (runReaderT logFirstAndRetSecond strings)
+("CD","ab")
+
+logFirstAndRetSecond :: 
+    ReaderT [String]    -- трансформер, внешняя монада
+    (Writer String)     -- внутренняя монада
+    String              -- возвращаемый композицией тип
+logFirstAndRetSecond = do
+    el1 <- asks head
+    el2 <- asks (map toUpper . head . tail)
+    lift (tell el1) -- подъем из внутренней монады -- можно читать как "поднять API внутренней монады"
+    return el2
+
+-- запакуем его в монаду-оболочку, для удобства
+type MyRW = ReaderT [String] (Writer String)
+
+ghci> :k MyRW 
+MyRW :: * -> * -- монада, одно-параметрический конструктор типов
+-- предоставляет ask, tell методы
+-- с учетом того, что tell надо лифтить
+
+logFirstAndRetSecond :: MyRW String
+logFirstAndRetSecond = do
+    el1 <- asks head
+    el2 <- asks (map toUpper . head . tail)
+    lift (tell el1) -- подъем из внутренней монады -- можно читать как "поднять API внутренней монады"
+    return el2
+
+-- утилита запуска
+runMyRW :: MyRW a -> [String] -> (a, String)
+runMyRW rw e = runWriter (runReaderT rw e)
+
+ghci> runMyRW logFirstAndRetSecond strings
+("CD","ab") -- пара: значение, лог
+
+```
+repl
+
+```hs
+https://stepik.org/lesson/31556/step/7?unit=11810
+TODO
+{--
+Наша абстракция пока что недостаточно хороша, поскольку пользователь всё ещё должен помнить такие детали, как, например, то, что 
+`asks` нужно вызывать напрямую, а `tell` — только с помощью `lift`.
+
+Нам хотелось бы скрыть такие детали реализации, обеспечив унифицированный интерфейс доступа к 
+возможностям нашей монады, связанным с чтением окружения, и к возможностям, связанным с записью в лог. 
+Для этого реализуйте функции `myAsks` и `myTell`, позволяющие записать `logFirstAndRetSecond` следующим образом:
+
+logFirstAndRetSecond :: MyRW String
+logFirstAndRetSecond = do
+  el1 <- myAsks head
+  el2 <- myAsks (map toUpper . head . tail)
+  myTell el1
+  return el2
+--}
+myAsks :: ([String] -> a) -> MyRW a
+myAsks = undefined
+
+myTell :: String -> MyRW ()
+myTell = undefined
+
+-- solution
+
+```
+test
+
+### 3.3.8 Reader, Writer, State определены как трансформеры
+
+Монады Reader, Writer, State определены как трансформеры.
+Т.е. способ получения монады через трансформер хорош настолько, 
+что стандартные монады реализованы именно так.
+
+Через внутреннюю монаду `Identity`
+```hs
+ghci> :i Reader
+type Reader :: * -> * -> *
+type Reader r = ReaderT r Identity :: * -> * -- Defined in ‘Control.Monad.Trans.Reader’
+
+ghci> :t Reader
+<interactive>:1:1: error: -- у нас нет конструктора `Reader`, это синоним, `type Reader`
+
+-- доступен такой конструктор (трансформера)
+ghci> :i reader
+reader :: Monad m => (r -> a) -> ReaderT r m a -- Defined in ‘Control.Monad.Trans.Reader’
+-- обычный ридер получится, если скормить ему монаду Identity
+
+-- производительность страдать не должна, ибо айдентити сделан через newtype (убираемый в рантайм)
+
+```
+repl
+
+```hs
+https://stepik.org/lesson/31556/step/9?unit=11810
+TODO
+{--
+Превратите монаду `MyRW` в трансформер монад `MyRWT`:
+
+logFirstAndRetSecond :: MyRWT IO String
+logFirstAndRetSecond = do
+  el1 <- myAsks head
+  myLift $ putStrLn $ "First is " ++ show el1
+  el2 <- myAsks (map toUpper . head . tail)
+  myLift $ putStrLn $ "Second is " ++ show el2
+  myTell el1
+  return el2
+
+GHCi> runMyRWT logFirstAndRetSecond ["abc","defg","hij"]
+First is "abc"
+Second is "DEFG"
+("DEFG","abc")
+--}
+type MyRWT m = ??
+
+runMyRWT :: ??
+runMyRWT = undefined
+
+myAsks :: Monad m => ??
+myAsks = undefined
+
+myTell :: Monad m => ??
+myTell = undefined
+
+myLift :: Monad m => ??
+myLift = undefined
+
+-- solution
+
+```
+test
+
+```hs
+https://stepik.org/lesson/31556/step/10?unit=11810
+TODO
+{--
+С помощью трансформера монад `MyRWT` мы можем написать безопасную версию `logFirstAndRetSecond`:
+
+logFirstAndRetSecond :: MyRWT Maybe String
+logFirstAndRetSecond = do
+  xs <- myAsk
+  case xs of
+    (el1 : el2 : _) -> myTell el1 >> return (map toUpper el2)
+    _ -> myLift Nothing
+
+GHCi> runMyRWT logFirstAndRetSecond ["abc","defg","hij"]
+Just ("DEFG","abc")
+GHCi> runMyRWT logFirstAndRetSecond ["abc"]
+Nothing
+
+Реализуйте безопасную функцию `veryComplexComputation`, 
+записывающую в лог через запятую первую строку четной длины и первую строку нечетной длины, 
+а возвращающую пару из второй строки четной и второй строки нечетной длины, приведенных к верхнему регистру:
+
+GHCi> runMyRWT veryComplexComputation ["abc","defg","hij"]
+Nothing
+GHCi> runMyRWT veryComplexComputation ["abc","defg","hij","kl"]
+Just (("KL","HIJ"),"defg,abc")
+
+Подсказка: возможно, полезно будет реализовать функцию `myWithReader`
+https://hoogle.haskell.org/?hoogle=withReader&scope=set%3Ahaskell-platform
+--}
+veryComplexComputation :: MyRWT Maybe (String, String)
+veryComplexComputation = undefined
+
+-- solution
+
+```
+test
+
+```hs
+https://stepik.org/lesson/31556/step/11?unit=11810
+TODO
+{--
+Предположим мы хотим исследовать свойства рекуррентных последовательностей. 
+Рекуррентные отношения будем задавать вычислениями типа 
+`State Integer Integer`, 
+которые, будучи инициализированы текущим значением элемента последовательности, 
+возвращают следующее значение в качестве состояния и текущее в качестве возвращаемого значения, например:
+
+tickCollatz :: State Integer Integer
+tickCollatz = do
+  n <- get
+  let res = if odd n then 3 * n + 1 else n `div` 2
+  put res
+  return n
+
+Используя монаду `State` из модуля `Control.Monad.Trans.State` и 
+трансформер `ExceptT` из модуля `Control.Monad.Trans.Except` 
+библиотеки `transformers`, реализуйте для монады
+
+type EsSi = ExceptT String (State Integer)
+
+функцию 
+`runEsSi :: EsSi a -> Integer -> (Either String a, Integer)`
+запускающую вычисление в этой монаде, 
+а также функцию 
+`go :: Integer -> Integer -> State Integer Integer -> EsSi ()`
+принимающую шаг рекуррентного вычисления и два целых параметра, задающие нижнюю и верхнюю границы допустимых значений вычислений. 
+Если значение больше или равно верхнему или меньше или равно нижнему, то оно прерывается исключением с соответствующим сообщением об ошибке
+
+GHCi> runEsSi (go 1 85 tickCollatz) 27
+(Right (),82)
+GHCi> runEsSi (go 1 80 tickCollatz) 27
+(Left "Upper bound",82)
+GHCi> runEsSi (forever $ go 1 1000 tickCollatz) 27
+(Left "Upper bound",1186)
+GHCi> runEsSi (forever $ go 1 10000 tickCollatz) 27
+(Left "Lower bound",1)
+--}
+import Control.Monad
+import Control.Monad.Trans
+import Control.Monad.Trans.State
+import Control.Monad.Trans.Except
+
+tickCollatz :: State Integer Integer
+tickCollatz = do
+  n <- get
+  let res = if odd n then 3 * n + 1 else n `div` 2
+  put res
+  return n
+
+type EsSi = ExceptT String (State Integer)
+
+runEsSi :: EsSi a -> Integer -> (Either String a, Integer)
+runEsSi = undefined 
+
+go :: Integer -> Integer -> State Integer Integer -> EsSi ()
+go = undefined
+
+-- solution
+
+```
+test
+
+```hs
+https://stepik.org/lesson/31556/step/12?unit=11810
+TODO
+{--
+Модифицируйте монаду `EsSi` из предыдущей задачи, 
+обернув ее в трансформер `ReaderT` с окружением, 
+представляющим собой пару целых чисел, задающих нижнюю и верхнюю границы для вычислений. 
+Функции `go` теперь не надо будет передавать эти параметры, они будут браться из окружения. 
+Сделайте получившуюся составную монаду трансформером:
+
+type RiiEsSiT m = ReaderT (Integer,Integer) (ExceptT String (StateT Integer m))
+
+Реализуйте также функцию для запуска этого трансформера
+
+runRiiEsSiT :: ReaderT (Integer,Integer) (ExceptT String (StateT Integer m)) a 
+                -> (Integer,Integer)  
+                -> Integer 
+                -> m (Either String a, Integer)
+
+и модифицируйте код функции `go`, изменив её тип на
+
+go :: Monad m => StateT Integer m Integer -> RiiEsSiT m ()
+
+так, чтобы для шага вычисления последовательности с отладочным выводом текущего элемента последовательности на экран
+
+tickCollatz' :: StateT Integer IO Integer
+tickCollatz' = do
+  n <- get
+  let res = if odd n then 3 * n + 1 else n `div` 2
+  lift $ putStrLn $ show res
+  put res
+  return n
+
+мы получили бы
+
+GHCi> runRiiEsSiT (forever $ go tickCollatz') (1,200) 27
+82
+41
+124
+62
+31
+94
+47
+142
+71
+214
+(Left "Upper bound",214)
+--}
+import Control.Monad
+import Control.Monad.Trans
+import Control.Monad.Trans.Reader
+import Control.Monad.Trans.State
+import Control.Monad.Trans.Except
+
+type RiiEsSiT m = ReaderT (Integer,Integer) (ExceptT String (StateT Integer m))
+
+runRiiEsSiT :: ReaderT (Integer,Integer) (ExceptT String (StateT Integer m)) a 
+                 -> (Integer,Integer) 
+                 -> Integer 
+                 -> m (Either String a, Integer)
+runRiiEsSiT = undefined 
+
+go :: Monad m => StateT Integer m Integer -> RiiEsSiT m ()
+go = undefined
+
+-- solution
+
+```
+test
+
+## chapter 3.4, Трансформер ReaderT
+
+https://stepik.org/lesson/38577/step/1?unit=17396
+
+- Тип ReaderT
+- Функтор Reader
+- Функтор ReaderT
+- Аппликативный функтор Reader
+- Аппликативный функтор ReaderT
+- Альтернативная реализация Applicative
+- Монада ReaderT
+- Класс MonadTrans и лифтинг
+- Стандартный интерфейс для ReaderT
+
 
 
 grep `TODO` markers, fix it.
