@@ -510,7 +510,7 @@ https://stepik.org/lesson/30723/step/1?unit=11811
 Если прищурится, можно разглядеть, как CPS позволяет создавать DSL (Domain Specific Language)
 ```hs
 -- сетап
-{-# LANGUAGE InstanceSigs #-}
+{-# LANGUAGE InstanceSigs #-} -- позволяет писать сигнатуры для инстансов
 import Control.Monad ( when )
 
 -- возьмем две обычные функции (square, add)
@@ -1499,6 +1499,451 @@ https://stepik.org/lesson/38577/step/1?unit=17396
 - Монада ReaderT
 - Класс MonadTrans и лифтинг
 - Стандартный интерфейс для ReaderT
+
+Ранее рассмотрели внешнюю сторону трансформеров (монад), их применение.
+Теперь рассмотрим реализацию трансформеров.
+
+Спойлер: ничего сложного, композиция: внутренняя монада заворачивается во внешнюю,
+внешняя (зная все про себя и внешний интерфейс внутренней) реализует монадический интерфейс для композиции в целом.
+
+### 3.4.2 ReaderT, конструктор reader
+
+Как трансформеры создавать, самостоятельно.
+
+Монаду `Reader` перепишем как трансформер (обвязку вокруг внутренней абстрактной монады) `ReaderT`.
+Рядом с реализацией `Reader` будем писать `ReaderT` и смотреть на разницу.
+```hs
+{-# LANGUAGE InstanceSigs #-} -- позволяет писать сигнатуры для инстансов
+
+newtype Reader r a = Reader { runReader :: r -> a } -- было
+newtype ReaderT r m a = ReaderT { runReaderT :: r -> m a } -- стало, m это еще один параметр, внутренняя монада
+
+-- Ридер это функциональная стрелка, со связанным первым параметром.
+-- Абстракция "чтения из окружения".
+
+reader :: (Monad m) => (r -> a) -> ReaderT r m a -- конструктор
+-- Нам нужен кастомный конструктор, чтобы иметь возможность упаковать стрелку `r -> a` в композитную монаду.
+-- Если этого не сделать, конструктор `ReaderT` будет требовать стрелку в монаду `r -> m a`,
+-- это не то, что мы хотим
+
+runReader (Reader (*3)) 7 -- стрелка пакуется в монаду ридер, ок
+runReaderT (ReaderT (func)) 7 where func = \x -> [x*3] -- для трансформера было бы так, внутренняя монада: список
+
+reader :: (Monad m) => (r -> a) -> ReaderT r m a -- реализация
+reader f = ReaderT (return . f) -- return after f, ретурн это стандартный способ заворачивания в монаду
+
+:t runReaderT (reader (*3)) 7 -- выражение полиморфно по внутренней монаде, надо указать компайлеру, какая монада нам нужна
+    :: (Monad m, Num a) => m a
+
+ghci> runReaderT (reader (*3)) 7 :: [Int] -- внутренняя монада: список
+[21]
+
+runReaderT (reader (*3)) 7 :: Maybe Int
+runReaderT (reader (*3)) 7 :: IO Int
+```
+repl
+
+```hs
+https://stepik.org/lesson/38577/step/3?unit=17396
+TODO
+{--
+В задачах из предыдущих модулей мы сталкивались с типами данных
+задающих вычисления с двумя и тремя окружениями соответственно.
+
+newtype Arr2 e1 e2 a = Arr2 { getArr2 :: e1 -> e2 -> a }
+newtype Arr3 e1 e2 e3 a = Arr3 { getArr3 :: e1 -> e2 -> e3 -> a }
+
+Можно расширить их до трансформеров:
+
+newtype Arr2T e1 e2 m a = Arr2T { getArr2T :: e1 -> e2 -> m a }
+newtype Arr3T e1 e2 e3 m a = Arr3T { getArr3T :: e1 -> e2 -> e3 -> m a }
+
+Напишите «конструирующие» функции
+
+arr2 :: Monad m => (e1 -> e2 -> a) -> Arr2T e1 e2 m a
+arr3 :: Monad m => (e1 -> e2 -> e3 -> a) -> Arr3T e1 e2 e3 m a
+
+обеспечивающие следующее поведение
+
+GHCi> (getArr2T $ arr2 (+)) 33 9 :: [Integer]
+[42]
+GHCi> (getArr3T $ arr3 foldr) (*) 1 [1..5] :: Either String Integer
+Right 120
+GHCi> import Data.Functor.Identity
+GHCi> runIdentity $ (getArr2T $ arr2 (+)) 33 9
+42
+--}
+arr2 :: Monad m => (e1 -> e2 -> a) -> Arr2T e1 e2 m a
+arr2 = undefined
+
+arr3 :: Monad m => (e1 -> e2 -> e3 -> a) -> Arr3T e1 e2 e3 m a
+arr3 = undefined
+
+-- solution
+
+```
+test
+
+### 3.4.4 Functor Reader
+
+Начнем писать реализацию: Функтор, Аппликативный функтор, монада.
+Могли бы сразу сделать монаду, получив функтор и аппликатив "бесплатно".
+Но в учебных целях пройдем всю цепочку снизу-вверх.
+```hs
+newtype Reader r a = Reader { runReader :: r -> a } -- было
+newtype ReaderT r m a = ReaderT { runReaderT :: r -> m a } -- стало, m это еще один параметр, внутренняя монада
+
+reader :: (Monad m) => (r -> a) -> ReaderT r m a -- конструктор трансформера
+reader f = ReaderT (return . f) -- return after f, ретурн это стандартный способ заворачивания в монаду
+
+-- вспомним основу ридера:
+instance Functor ((->) r) where -- базовый механизм утилизации стрелки
+    fmap :: (a -> b) -> (r -> a) -> (r -> b)
+    fmap f g = f . g -- f after g, композиция функций, ибо функтор у нас над стрелкой (функцией из эр)
+
+-- для замаскированной стрелки, функтор отличается не сильно
+instance Functor (Reader r) where
+    fmap :: (a -> b) -> Reader r a -> Reader r b
+    fmap f ra = Reader rb where rb = f . (runReader ra) -- вынули внутреннюю стрелку через runReader, сделали композицию f after ra
+    fmap f (Reader g) = Reader $ f . g -- тоже самое, но через пат.мат.
+
+runReader (fmap succ $ Reader (*3)) 7 -- 22
+```
+repl
+
+### 3.4.5 Functor ReaderT
+
+Продолжаем, пишем функтор трансформера
+```hs
+instance Functor (Reader r) where
+    fmap :: (a -> b) -> Reader r a -> Reader r b
+    fmap f ra = Reader $ f . (runReader ra) -- композиция двух стрелок, завернутая в конструктор Reader
+-- продолжаем с этого места
+
+instance (Functor m) => Functor (ReaderT r m) where -- функтор трансформера возможен если внутренняя монада тоже функтор
+    fmap :: (a -> b) -> ReaderT r m a -> ReaderT r m b
+    fmap f rma = ReaderT (rmb) where rmb = (fmap f) . (runReaderT rma) -- композиция двух стрелок,
+    -- с добавкой протаскивания функции через внутреннюю монаду: `fmap f`
+    -- протащить функцию через внутр.монаду после распаковки (и применения) стрелки из второго параметра
+
+ghci> :t runReaderT -- подробнее про необходимость fmap внутри реализации fmap
+runReaderT :: ReaderT r m a -> r -> m a -- берет ридер rma и возвращает функцию `r -> m a` результатом которой будет монада ma
+-- чтобы функцию `a -> b` применить к этому, нужен fmap, реализованный для этой монады (что гарантируется ограничением контекста)
+
+-- примеры работы функтора (fmap)
+
+runReaderT (fmap succ $ reader (*3)) 7 :: [Int] -- [22] -- внутренняя монада: список
+runReader (fmap succ $ Reader (*3)) 7 -- 22 -- сравни с ридером не-трансформером
+
+-- рассуждение о том, что конструктор `reader` позволяет использовать внутреннюю монаду только тривиальным образом,
+-- в силу применения `return` этой монады.
+-- Для не-тривиальных случаев необходимо использовать родной конструктор `ReaderT`
+rl3 = ReaderT (\env -> [42, env, env*2]) -- :: ReaderT a [] a -- ReaderListThreeElem = rl3
+-- определив стрелку в конструкторе, мы показали компайлеру, что монада будет: список
+-- монада списка не-тривиальная, она разветвляет вычисления по трем веткам;
+
+runReaderT (fmap succ rl3) 7 -- [43, 8 15] -- [42+1, 7+1,  (7*2)+1]
+```
+repl
+
+```hs
+https://stepik.org/lesson/38577/step/6?unit=17396
+TODO
+{--
+Сделайте трансформеры
+
+newtype Arr2T e1 e2 m a = Arr2T { getArr2T :: e1 -> e2 -> m a }
+newtype Arr3T e1 e2 e3 m a = Arr3T { getArr3T :: e1 -> e2 -> e3 -> m a }
+
+представителями класса типов `Functor` в предположении, что `m` является функтором:
+
+GHCi> a2l = Arr2T $ \e1 e2 -> [e1,e2,e1+e2]
+GHCi> (getArr2T $ succ <$> a2l) 10 100
+[11,101,111]
+GHCi> a3e = Arr3T $ \e1 e2 e3 -> Right (e1+e2+e3)
+GHCi> (getArr3T $ sqrt <$> a3e) 2 3 4
+Right 3.0
+--}
+newtype Arr2T e1 e2 m a = Arr2T { getArr2T :: e1 -> e2 -> m a }
+newtype Arr3T e1 e2 e3 m a = Arr3T { getArr3T :: e1 -> e2 -> e3 -> m a }
+
+-- solution
+
+```
+test
+
+### 3.4.7 Applicative Reader
+
+Продолжаем, реализация аппликатива, `Reader`
+```hs
+-- ранее мы делали аппликатив для стрелки
+instance Applicative ((->) r) where
+    pure :: a -> (r -> a)
+    pure x e = x -- стрелка увеличивает арность, не забываем об этом
+    pure x = \e -> x -- через лямбду
+    pure x = \_ -> x
+    pure = const -- игнор второго параметра, это конст
+    (<*>) :: f (a -> b) -> f a -> f b -- оригинальная сигнатура `applied over`
+    (<*>) :: (r -> (a -> b)) -> (r -> a) -> (r -> b) -- после подстановки
+    (<*>) :: (r -> a -> b) -> (r -> a) -> r -> b -- убрали лишние скобки, увидели: откуда увеличение арности (доп. е)
+    (<*>) g h env = g env (h env) -- реализация по сигнатуре: из е получаем а, из а получаем бе
+    (<*>) rab ra e = rab e (ra e) -- так понятнее?
+    (<*>) g h = \e -> g e (h e) -- через лямбду, в каждое вычисление протаскиваем `e :: r`
+-- имея это перед глазами, сделаем аппликатив для ридера
+
+instance Applicative (Reader r) where
+    pure :: a -> Reader r a
+    pure = Reader . const
+    (<*>) :: Reader r (a -> b) -> Reader r a -> Reader r b
+    rab <*> ra = Reader rb where rb = \env -> runReader rab env (runReader ra env)
+-- `runReader rab`, `runReader ra`: распаковка стрелки из контекста ридера, не более того
+
+-- пример использования
+runReader (Reader (+) <*> Reader (^2)) 7 -- 56 = 7^2 + 7
+```
+repl
+
+### 3.4.8 Applicative ReaderT
+
+Реализуем аппликатив для `ReaderT`
+```hs
+-- сделать аппликатив трансформера можно только если внутренняя монада тоже аппликатив
+instance (Applicative m) => Applicative (ReaderT r m) where
+    pure :: a -> ReaderT r m a
+    pure = ReaderT . const . pure -- дополнительно запакуем в аппликатив внутренней монады, pure
+    (<*>) :: ReaderT r m (a -> b) -> ReaderT r m a -> ReaderT r m b
+    rmab <*> rma = ReaderT rmb where rmb = \env -> (runReaderT rmab env) <*> (runReaderT rma env)
+-- внутренний аппликатив делает применение функции `a -> b` внутри контекста внутренней монады
+-- Общая идея: там, где раньше был параметр `a`, теперь параметра `m a` с интерфейсом согласно ограничению контекста (Applicative m).
+
+-- example: аппликатив трансформера показывает эффекты как ридера, так и списка (ветвление вычислений):
+rl2 = ReaderT (\env -> [const env, (+env)]) -- две функции, ReaderListTwoElem
+rl3 = ReaderT (\env -> [42, env, env*2]) -- :: ReaderT a [] a -- ReaderListThreeElem = rl3
+runReaderT (rl2 <*> rl3) 7
+[7, 7, 7, 49, 14, 21] -- `const env` three times, `+env` three times: (42+7, 7+7, 7*2+7)
+-- const env: 42, env, env*2 -- были проигнорированы, ибо const, подставлена 7
+-- +env: 42, env, env*2 -> 42+7, 7+7, 7*2+7
+```
+repl
+
+### 3.4.9 Applicative ReaderT, реализация через liftA2
+
+Композиция двух аппликативных функторов дает аппликативный функтор.
+Поэтому, `ReaderT` можно сделать аппликативом просто через композицию внутреннего аппликатива и внешнего.
+```hs
+-- Реализация через композицию будет использовать liftA2 (подъем двух-параметрической функции в аппликатив),
+-- работа заключается в поднятии функции в контекст аппликатива
+ghci> :t liftA2 -- функция трех параметров, первый параметр: функция двух параметров
+liftA2 :: Applicative f => (a -> b -> c) -> f a -> f b -> f c
+
+ghci> :t (<*>) -- оператор "ап": функция двух параметров, можно использовать в лифте как первый параметр
+(<*>) :: Applicative f => f (a -> b) -> f a -> f b
+
+ghci> :t liftA2 (<*>) -- лифтанем "ап" в следующий слой аппликатива
+liftA2 (<*>)
+  :: (Applicative f1, Applicative f2) => -- получим двух-слойный аппликатив
+     f1 (f2 (a -> b)) -> f1 (f2 a) -> f1 (f2 b) -- получается сигнатура оператора "ап" для `ReaderT`
+-- это и есть композиция двух операторов `applied over`, ап внутри и ап снаружи, два слоя ап.
+
+instance (Applicative m) => Applicative (ReaderT r m) where
+    pure :: a -> ReaderT r m a
+    pure = ReaderT . const . pure -- дополнительно запакуем в аппликатив внутренней монады, pure
+    (<*>) :: ReaderT r m (a -> b) -> ReaderT r m a -> ReaderT r m b
+    -- rmab <*> rma = ReaderT rmb where rmb = \env -> (runReaderT rmab env) <*> (runReaderT rma env)
+    rmab <*> rma = ReaderT rmb where rmb = liftA2 (<*>) (runReaderT rmab) (runReaderT rma)
+
+-- как видно, вместо вот этого:
+\env -> (runReaderT rmab env) <*> (runReaderT rma env)
+-- получилось вот это (композиция двух аппликативов):
+liftA2 (<*>) (runReaderT rmab) (runReaderT rma)
+
+-- по типам это как-то так:
+liftA2 (<*>) ::
+f1 (f2 (a -> b)) -> f1 (f2 a) -> f1 (f2 b)
+~>
+(r -> m (a -> b)) -> (r -> m a) -> (r -> m b)
+~>
+ReaderT r m (a -> b) -> ReaderT r m a -> ReaderT r m b
+
+-- через подстановки, можно доказать, что реализация через композицию (лифт)
+-- в точности повторяет оригинальную
+
+liftA2 :: Applicative f => (a -> b -> c) -> f a -> f b -> f c
+liftA2 f m1 m2 = f <$> ma <*> m2 -- видно внутренний аппликатив?
+
+f1 (f2 (a -> b)) -> f1 (f2 a) -> f1 (f2 b)
+~> -- через сигнатуры ReaderT
+(r -> m (a -> b)) -> (r -> m a) -> (r -> m b)
+
+g :: r -> m (a -> b)
+g = runReaderT rmab
+h :: r -> m a
+h = runReaderT rma
+
+liftA2 (<*>) g h = -- по определению лифта:
+(<*>) <$> g <*> h = -- fmap для аппликатива стрелки = композиция:
+((<*>) . g) <*> h = -- развернем оператор "ап" для аппликатива стрелки:
+\env -> ((<*>) . g) env (h env) = -- по определению композиции (ап после же):
+\env -> (<*>) (g env) (h env) = -- в инфиксном стиле:
+\env -> (g env) <*> (h env) = -- развернем обратно:
+\env -> (runReaderT rmab env) <*> (runReaderT rma env) = -- чтд
+
+-- для справки:
+
+instance Applicative ((->) r) where -- аппликатив для стрелки, reference
+    pure :: a -> (r -> a)
+    pure x e = x
+    (<*>) :: (r -> (a -> b)) -> (r -> a) -> (r -> b)
+    (<*>) g h = \e -> g e (h e)
+
+instance (Applicative m) => Applicative (ReaderT r m) where -- оригинальная реализация
+    pure :: a -> ReaderT r m a
+    pure = ReaderT . const . pure
+    (<*>) :: ReaderT r m (a -> b) -> ReaderT r m a -> ReaderT r m b
+    rmab <*> rma = ReaderT rmb where rmb = \env -> (runReaderT rmab env) <*> (runReaderT rma env)
+```
+repl
+
+```hs
+https://stepik.org/lesson/38577/step/10?unit=17396
+TODO
+{--
+Сделайте трансформеры
+
+newtype Arr2T e1 e2 m a = Arr2T { getArr2T :: e1 -> e2 -> m a }
+newtype Arr3T e1 e2 e3 m a = Arr3T { getArr3T :: e1 -> e2 -> e3 -> m a }
+
+представителями класса типов `Applicative` в предположении, что `m` является аппликативным функтором:
+
+GHCi> a2l = Arr2T $ \e1 e2 -> [e1,e2]
+GHCi> a2fl = Arr2T $ \e1 e2 -> [(e1*e2+),const 7]
+GHCi> getArr2T (a2fl <*> a2l) 2 10
+[22,30,7,7]
+GHCi> a3fl = Arr3T $ \e1 e2 e3 -> [(e2+),(e3+)]
+GHCi> a3l = Arr3T $ \e1 e2 e3 -> [e1,e2]
+GHCi> getArr3T (a3fl <*> a3l) 3 5 7
+[8,10,10,12]
+--}
+newtype Arr2T e1 e2 m a = Arr2T { getArr2T :: e1 -> e2 -> m a }
+newtype Arr3T e1 e2 e3 m a = Arr3T { getArr3T :: e1 -> e2 -> e3 -> m a }
+
+-- solution
+-- у проверяющей программе не включено InstanceSigs
+-- Тут все равно нужно вписывать свою реализацию функтора
+
+```
+test
+
+### 3.4.11 Monad ReaderT
+
+Осталось реализовать интерфейс монады для трансформера `ReaderT`.
+Поскольку return = pure, то реализовать надо только оператор `bind`
+```hs
+-- для справки
+instance Monad ((->) r) where
+    (>>=) :: (r -> a) -> (a -> (r -> b)) -> (r -> b) -- m >>= k
+    m >>= k = \env -> k (m env) env -- env :: r
+
+instance Monad (Reader r) where
+    (>>=) :: Reader r a -> (a -> Reader r b) -> Reader r b -- m >>= k
+    m >>= k = Reader rb where rb = \env -> let v = runReader m env in runReader (k v) env
+    -- env :: r; v :: a; k v :: Reader r b
+
+-- поехали:
+instance (Monad m) => Monad (ReaderT r m) where
+    (>>=) :: ReaderT r m a -> (a -> ReaderT r m b) -> ReaderT r m b -- m >>= k
+    m >>= k = ReaderT rmb where rmb = \env -> do -- do: подняли вычисления во внутреннюю монаду, код 1-в-1 с `Reader`
+        v <- runReaderT m env
+        runReaderT (k v) env
+
+-- example
+
+rl3 = ReaderT (\env -> [42, env, env*2]) -- :: ReaderT a [] a -- ReaderListThreeElem = rl3
+runReaderT (do { x <- rl3; return (succ x) }) 7 -- env = 7
+[43, 8, 15] -- env +1 -- два эффекта: ридер (чтение из окружения, 7); список
+```
+repl
+
+```hs
+https://stepik.org/lesson/38577/step/12?unit=17396
+TODO
+{--
+Сделайте трансформеры
+
+newtype Arr2T e1 e2 m a = Arr2T { getArr2T :: e1 -> e2 -> m a }
+newtype Arr3T e1 e2 e3 m a = Arr3T { getArr3T :: e1 -> e2 -> e3 -> m a }
+
+представителями класса типов `Monad` в предположении, что `m` является монадой:
+
+GHCi> a2l = Arr2T $ \e1 e2 -> [e1,e2]
+GHCi> getArr2T (do {x <- a2l; y <- a2l; return (x + y)}) 3 5
+[6,8,8,10]
+GHCi> a3m = Arr3T $ \e1 e2 e3 -> Just (e1 + e2 + e3)
+GHCi> getArr3T (do {x <- a3m; y <- a3m; return (x * y)}) 2 3 4
+Just 81
+--}
+newtype Arr2T e1 e2 m a = Arr2T { getArr2T :: e1 -> e2 -> m a }
+newtype Arr3T e1 e2 e3 m a = Arr3T { getArr3T :: e1 -> e2 -> e3 -> m a }
+
+-- solution
+newtype Arr3T e1 e2 e3 m a = Arr3T { getArr3T :: e1 -> e2 -> e3 -> m a }
+instance (Functor m, Monad m) => Functor (Arr3T e1 e2 e3 m) where
+    fmap = liftM
+instance (Applicative m, Monad m) => Applicative (Arr3T e1 e2 e3 m) where
+    pure = return
+    (<*>) =  ap
+
+```
+test
+
+```hs
+https://stepik.org/lesson/38577/step/13?unit=17396
+TODO
+{--
+Разработанная нами реализация интерфейса монады для трансформера `Arr3T` (как и для `Arr2T` и `ReaderT`)
+имеет не очень хорошую особенность. 
+При неудачном сопоставлении с образцом вычисления в этой монаде завершаются аварийно, 
+с выводом сообщения об ошибке в диагностический поток:
+
+GHCi> a3m = Arr3T $ \e1 e2 e3 -> Just (e1 + e2 + e3)
+GHCi> getArr3T (do {9 <- a3m; y <- a3m; return y}) 2 3 4
+Just 9
+GHCi> getArr3T (do {10 <- a3m; y <- a3m; return y}) 2 3 4
+*** Exception: Pattern match failure in do expression at :12:15-16
+
+Для обычного ридера такое поведение нормально, 
+однако у трансформера внутренняя монада может уметь обрабатывать ошибки более щадащим образом. 
+Переопределите функцию `fail` класса типов `Monad` для `Arr3T` так, 
+чтобы обработка неудачного сопоставления с образцом осуществлялась бы во внутренней монаде:
+
+GHCi> getArr3T (do {10 <- a3m; y <- a3m; return y}) 2 3 4
+Nothing
+--}
+newtype Arr3T e1 e2 e3 m a = Arr3T { getArr3T :: e1 -> e2 -> e3 -> m a }
+
+-- solution
+
+```
+test
+
+### 3.4.14
+
+Траансформер это монада.
+
+Внутренняя монада может иметь некоторый интерфейс, мы хотим функции этого интерфейса вызывать во внешней монаде.
+IMHO: В общем случае это нереально.
+
+Реализуем функцию `lift` для трансформера-монады.
+
+Предисловие - херня, мы хотим функцию, поднимающую любую монаду в трансформер, `lift`
+```hs
+ghci> :t lift
+lift
+  :: (MonadTrans t, Monad m) =>
+     m a -> t m a
+
+```
+repl
 
 
 
