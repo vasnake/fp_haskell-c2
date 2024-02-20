@@ -46,3 +46,4 @@ https://stackoverflow.com/questions/23342184/difference-between-monad-and-applic
 - How and why does the Haskell Cont monad work? https://stackoverflow.com/questions/3322540/how-and-why-does-the-haskell-cont-monad-work
 - Continuation passing style https://en.wikibooks.org/wiki/Haskell/Continuation_passing_style
 - The Evolution of a Haskell Programmer https://willamette.edu/~fruehr/haskell/evolution.html
+- ListT done right https://wiki.haskell.org/ListT_done_right
