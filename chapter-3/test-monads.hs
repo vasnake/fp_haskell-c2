@@ -1,6 +1,7 @@
 -- {-# LANGUAGE TypeOperators #-} -- для разрешения `|.|` в качестве имени оператора над типами
 -- {-# LANGUAGE PolyKinds #-}
--- {-# LANGUAGE InstanceSigs #-} -- позволяет писать сигнатуры для инстансов
+{-# LANGUAGE InstanceSigs #-} -- позволяет писать сигнатуры для инстансов
+
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 {-# OPTIONS_GHC -Wno-noncanonical-monad-instances #-}
 {-# OPTIONS_GHC -Wno-noncanonical-monoid-instances #-}
@@ -14,6 +15,7 @@
 {-# HLINT ignore "Redundant return" #-}
 {-# HLINT ignore "Redundant bracket" #-}
 {-# HLINT ignore "Use <$>" #-}
+{-# HLINT ignore "Use const" #-}
 
 module TestMonads where
 
@@ -47,11 +49,12 @@ import Control.Monad ( liftM, mplus, guard, mfilter, ap, guard, MonadPlus(..), w
 -- import Control.Applicative (Alternative(..))
 
 -- import Control.Monad.Trans.Reader as TR hiding (reader, Reader, ReaderT, runReader, runReaderT )
--- import Control.Monad.Trans.Reader as TR
+-- import Control.Monad.Trans.Reader as TR ( asks)
  -- ( ask, asks, Reader(..), ReaderT(..) )
 
 import Control.Monad.Trans.Writer ( runWriter, tell, Writer )
-import Control.Monad.Trans ( lift )
+-- import Control.Monad.Trans ( lift )
+import Control.Monad.Trans.Class
 
 -- import GHC.Show (Show)
 -- import GHC.Base (Eq)
@@ -224,10 +227,12 @@ callCC f = Cont (\c -> runCont (f (\a -> Cont (\_ -> c a))) c)
 
 -- будем решать задачу объединения ридера и врайтера
 -- эффект ридера, читает второй элемент из списка (строк    )
+{--
 secondElem :: Reader [String] String
 secondElem = do
     el2 <- asks ((map toUpper) . head . tail)
     return el2
+--}
 
 strings = ["ab", "cd", "fg"]
 
@@ -282,7 +287,7 @@ t0 = runReader (Reader (*3)) 7 -- стрелка пакуется в монад�
 reader :: (Monad m) => (r -> a) -> ReaderT r m a -- реализация
 reader f = ReaderT (return . f) -- return after f, ретурн это стандартный способ заворачивания в монаду
 
-t1 = runReaderT (reader (*3)) 7 -- выражение полиморфно по внутренней монаде, надо указать компайлеру, какая монада нам нужна
+-- t1 = runReaderT (reader (*3)) 7 -- выражение полиморфно по внутренней монаде, надо указать компайлеру, какая монада нам нужна
 t2 = runReaderT (reader (*3)) 7 :: [Int] -- внутренняя монада: список
 t3 = runReaderT (reader (*3)) 7 :: Maybe Int
 t4 = runReaderT (reader (*3)) 7 :: IO Int
@@ -344,10 +349,23 @@ instance Monad (Reader r) where
     -- m >>= k = Reader rb where rb = \env -> let v = runReader m env in runReader (k v) env
     -- env :: r; v :: a; k v :: Reader r b
 
--- поехали:
 instance (Monad m) => Monad (ReaderT r m) where
     (>>=) :: ReaderT r m a -> (a -> ReaderT r m b) -> ReaderT r m b -- m >>= k
     m >>= k = ReaderT rmb where
         rmb env = do -- do: подняли вычисления во внутреннюю монаду, код 1-в-1 с `Reader`         
             v <- runReaderT m env
             runReaderT (k v) env
+
+instance MonadTrans (ReaderT r) where
+    lift :: (Monad m) => m a -> ReaderT r m a
+    lift m = ReaderT (\_ -> m) -- ридер это стрелочный тип, поэтому лямбда
+
+ask :: (Monad m) => ReaderT r m r -- для трансформера стало так
+ask = ReaderT return
+
+asks :: (Monad m) => (r -> a) -> ReaderT r m a -- для трансформера стало так
+asks f = ReaderT (return . f) -- внутренняя монада требует наличия `return`
+
+local :: (r -> r) -> ReaderT r m a -> ReaderT r m a
+local f rma = ReaderT ((runReaderT rma) . f) -- так как ридер это функция, имееем композицию функций
+-- следует помнить, енв прокидывается в разные вычисления независимо (см. пример)
