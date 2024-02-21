@@ -533,6 +533,453 @@ https://stepik.org/lesson/38579/step/1?unit=20504
 - Лифтинг в StateT
 - Стандартный интерфейс для StateT
 
+### 4.2.2 lectures code
+
+Код из лекций
+```hs
+{-# LANGUAGE InstanceSigs #-}
+class MonadTrans t where
+  lift :: Monad m => m a -> t m a
+
+newtype StateT s m a = StateT { runStateT :: s -> m (a,s) }
+
+state :: Monad m => (s -> (a, s)) -> StateT s m a
+state f = StateT (return . f)
+
+instance Functor m => Functor (StateT s m) where
+  fmap :: (a -> b) -> StateT s m a -> StateT s m b
+  fmap f m = StateT $ \st -> fmap updater $ runStateT m st
+    where updater ~(x, s) = (f x, s)
+
+instance Monad m => Applicative (StateT s m) where
+  pure :: a -> StateT s m a
+  pure x = StateT $ \ s -> return (x, s)
+
+  (<*>) :: StateT s m (a -> b) -> StateT s m a -> StateT s m b
+  f <*> v = StateT $ \ s -> do
+      ~(g, s') <- runStateT f s
+      ~(x, s'') <- runStateT v s'
+      return (g x, s'')
+
+instance Monad m => Monad (StateT s m) where
+  (>>=) :: StateT s m a -> (a -> StateT s m b) -> StateT s m b
+  m >>= k  = StateT $ \s -> do
+    ~(x, s') <- runStateT m s
+    runStateT (k x) s'
+
+instance MonadTrans (StateT s) where
+  lift :: Monad m => m a -> StateT s m a
+  lift m = StateT $ \st -> do
+    a <- m
+    return (a, st)
+
+get :: Monad m => StateT s m s
+get = state $ \s -> (s, s)
+
+put :: Monad m => s -> StateT s m ()
+put s = state $ \_ -> ((), s)
+
+modify :: Monad m => (s -> s) -> StateT s m ()
+modify f = state $ \s -> ((), f s)
+```
+repl
+
+### 4.2.3 newtype StateT, state
+
+На базе (ранее рассмотренной) монады `State`, реализуем монаду-трансформер `StateT`.
+Это стрелочный тип, поэтому будут лямбды.
+```hs
+newtype State s a = State { runState :: s -> (a, s) }
+-- было: стрелка из старого стейта в пару: значение, новый стейт
+
+-- стало: аналогичная стрелка, но пара завернута во внутреннюю (абстрактную) монаду
+newtype StateT s m a = StateT { runStateT :: s -> m (a, s) }
+
+-- обобщенный конструктор, на входе стрелка без намека на монаду,
+-- монада должна быть определена требованием к возвращаемому типу
+state :: (Monad m) => (s -> (a, s)) -> StateT s m a
+state f = StateT (return . f) -- `return . f` завернем результат стрелки в монаду (внутреннюю)
+-- ретурн: "тривиальный" конструктор, никаких сложных выражений здесь нельзя
+
+-- example
+
+-- тривиальный конструктор
+ghci> :t runStateT (state (\st -> ("foo", st*2))) 5 -- начальный стейт = 5
+  :: (Monad m, Num s) => m (String, s) -- тип полиморфный по внутренней монаде
+-- подскажем тип и посмотрим на результат вычисления:
+ghci> runStateT (state (\st -> ("foo", st*2))) 5 :: [(String, Int)]
+[("foo",10)]
+
+-- "родной" нетривиальный конструктор, выражения могут быть любой сложности
+sm = StateT $ \st -> Just (show $ st+3, st*2)
+ghci> :t sm
+sm :: (Show a, Num a) => StateT a Maybe String -- внутренняя монада мейби, тип значения: строка
+
+ghci> runStateT sm 5 -- начальный стейт = 5
+Just ("8",10)
+
+-- чуть сложнее, внутри монада списка
+sl3 = StateT $ \st -> [(st+1, 42), (st+2, st), (st+3, st*2)] -- поскольку это стрелочный тип,
+-- внутрь мы можем засунуть что угодно, лишь бы совпадало по типа `s -> m (a, s)`
+ghci> runStateT sl3 5
+[(6,42),(7,5),(8,10)]
+ghci> :t sl3
+sl3 :: Num a => StateT a [] a -- внутренняя монада: список, значение: тот же тип что и стейт
+```
+repl
+
+```hs
+https://stepik.org/lesson/38579/step/4?unit=20504
+TODO
+{--
+Реализуйте функции `evalStateT` и `execStateT`
+--}
+evalStateT :: Monad m => StateT s m a -> s -> m a
+evalStateT = undefined
+
+execStateT :: Monad m => StateT s m a -> s -> m s
+execStateT = undefined
+
+-- solution
+
+```
+test
+
+```hs
+https://stepik.org/lesson/38579/step/5?unit=20504
+TODO
+{--
+Нетрудно понять, что монада `State` более «сильна», чем монада `Reader`: 
+вторая тоже, в некотором смысле, предоставляет доступ к глобальному состоянию, 
+но только, в отличие от первой, не позволяет его менять. 
+Покажите, как с помощью `StateT` можно эмулировать `ReaderT`:
+
+GHCi> evalStateT (readerToStateT $ asks (+2)) 4
+6
+GHCi> runStateT  (readerToStateT $ asks (+2)) 4
+(6,4)
+--}
+readerToStateT :: Monad m => ReaderT r m a -> StateT r m a
+readerToStateT = undefined
+
+-- solution
+
+```
+test
+
+### 4.2.6 Functor StateT
+
+Реализуем функтор для трансформера `StateT`
+```hs
+-- для простого стейт было так:
+instance Fuctor (State s) where
+  fmap :: (a -> b) -> State s a -> State s b
+  fmap ab sa = State $ \st -> -- стрелочный тип, поэтому лямбда, начальный стейт передается снаружи
+    updater (runState sa st) where updater ~(x, s) = (ab x, s) -- ленивый пат.мат
+
+-- для трансформера с внутренней абстрактной монадой (функтором) стало так:
+instance (Functor m) => Functor (StateT s m) where
+  fmap :: (a -> b) -> StateT s m a -> StateT s m b
+  fmap f m = StateT $ \st -> fmap updater (runStateT m st) -- ключевой момент: использование внутреннего 
+  -- fmap для затаскивания функции во внутреннюю монаду
+    where updater ~(x, s) = (f x, s)
+
+ghci> :t runStateT
+runStateT :: StateT s m a -> s -> m (a, s) -- функция двух аргументов,
+-- берет трансформер, начальный стейт, возвращает пару в монаде
+
+-- example
+
+sl3 = StateT $ \st -> [(st+1, 42), (st+2, st), (st+3, st*2)]
+ghci> runStateT sl3 5 -- в объекте sl3 стрелка, скормив ей начальный стейт 5 получаем:
+[(6,42),(7,5),(8,10)]
+
+ghci> runStateT (fmap (^2) sl3) 5 -- начальный стейт = 5, функторим возведенеи в квадрат
+[(36,42),(49,5),(64,10)] -- (5+1)^2, (5+2)^2, (5+3)^2
+
+-- заметим, функтор может менять значения, но не может менять стейт или структуру
+```
+repl
+
+### 4.2.7 Applicative State
+
+Реализуем аппликативный функтор для трансформера `StateT`.
+Аппликатив уже может (и делает) работать со стейтом.
+Кстати, тут стейт прокидывается (и модифицируется) по цепочке (в отличие от ридера).
+Не может работать со структурой; влияние левого вычисления на правое и структуру результата: забота монады.
+```hs
+-- для простого аппликатива стейт было так:
+instance Applicative (State s) where
+  pure :: a -> State s a
+  pure x = State (\s -> (x, s))
+
+  (<*>) :: State s (a -> b) -> State s a -> State s b
+  sab <*> sa = State sb where sb = \s -> -- стейт это стрелочный тип, поэтому начальный стейт приходит снаружи, поэтому лямбда
+    let (g, s1) = runState sab s -- левое вычисление на начальном стейте
+        (x, s2) = runState sa s1 -- правое вычисление, стейт уже модифицирован левым вычислением
+    in  (g x, s2) -- применение функции из левого к аргументу из правого
+```
+repl
+
+### 4.2.8 Applicative StateT
+
+Продолжение [предыдущей лекции](#427-applicative-state)
+```hs
+-- для трансформера стейт-с-внутренней-монадой стало так:
+instance (Monad m) => Applicative (StateT s m) where
+  pure :: a -> StateT s m a
+  pure x = StateT $ \s -> return (x, s) -- добавился внутремонадный `return` для заворачивания пары
+
+  (<*>) :: StateT s m (a -> b) -> StateT s m a -> StateT s m b
+  f <*> v = StateT $ \s -> do -- появлась ду-нотация для доступа во внутреннюю монаду
+      ~(g, s') <- runStateT f s
+      ~(x, s'') <- runStateT v s'
+      return (g x, s'')
+-- обратите внимание: заменить контекст (Monad m) на (Applicative m) не получается,
+-- интерфейс аппликатива не дает возможности разобрать пару, находящуюся под барьером аппликатива.
+
+-- example
+
+stT1 = state $ \x -> ((^2), x+2) -- функция (левый параметр аппликатива)
+stT2 = state $ \x -> (x, x+3) -- значения (правый параметр аппликатива)
+-- в паре первый элемент это значение, второй это стейт
+runStateT (stT1 <*> stT2) 5 :: Maybe (Int, Int) -- stT1 applied over stT2, с подсказкой типа внутренней монады конструктору
+Just (49,10) -- не сразу доходит, откуда 49. Разберем по шагам:
+-- ((^2), 5+2) -- в левом вычислении получили пару
+-- (7^2, 7+3) -- в правом вычислении получили пару
+
+```
+repl
+
+```hs
+https://stepik.org/lesson/38579/step/9?unit=20504
+TODO
+{--
+Какие из перечисленных конструкторов типов являются представителями класса `Applicative`? 
+(Мы пока ещё не видели реализацию представителя класса `Monad` для нашего трансформера `StateT`, 
+но предполагается, что все уже догадались, что она скоро появится.)
+
+Select all correct options from the list
+- StateT Int (Writer (Sum Int))
+- StateT () (StateT Int (Const ()))
+- StateT () (ReaderT Int (Writer String))
+- StateT Int ZipList
+- StateT () (ReaderT Int ZipList)
+- StateT String (Const Int)
+--}
+
+-- solution
+{--
+> на примере одного из случаев:
+StateT () (ReaderT Int (Writer String)) - как следует из последних минут предыдущего видео, 
+чтобы этот конструктор был аппликативом, ReaderT Int (Writer String) должен быть монадой.
+Чтобы ReaderT Int (Writer String) был монадой, нужно, чтобы Writer String был монадой (смотри лекцию 4.1 Трансформер WriterT)
+чтобы Writer String был монадой, нужно, чтобы String был моноидом
+
+> StateT имеет несколько параметров и объявлен представителем Applicative (и Monad) не безусловно, 
+а при некоторых дополнительных условиях на некоторые из этих параметров
+--}
+
+```
+test
+
+### 4.2.10 Monad StateT
+
+Реализуем монаду для трансформера `StateT`
+```hs
+-- для простой монады стейт было так:
+instance Monad (State s) where
+  (>>=) :: State s a -> (a -> State s b) -> State s b
+  m >>= k = State S \s -> -- стрелочный тип внутри стейт, поэтому лямбда, начальный стейт приходит снаружи
+    let (x, s2) = runState m s -- левое вычисление
+    in  runState (k x) s2 -- правое вычисление, с учетом результатов левого (и структура и стейт могут меняться)
+
+-- для трансформера стало так:
+instance (Monad m) => Monad (StateT s m) where
+  (>>=) :: StateT s m a -> (a -> StateT s m b) -> StateT s m b
+  m >>= k  = StateT $ \s -> do -- ду-нотация для прохода во внутреннюю монаду
+    ~(x, s') <- runStateT m s -- ленивый пат.мат., левое вычисление
+    runStateT (k x) s' -- правое вычисление
+
+-- example
+stT1 = state $ \x -> ((^2), x+2)
+stT2 = state $ \x -> (x, x+3)
+ghci> runStateT (do { g <- stT1; x <- stT2; return (g x) }) 5 -- внутренняя монада IO (repl)
+(49,10) -- ^2, 5+2; 7^2, 7+3
+-- обратите внимание, в выражении работы с монадами стейт,
+-- мы работаем со значением, стейт остается за кадром, внутри определения монад stT1, stT2
+
+```
+repl
+
+```hs
+https://stepik.org/lesson/38579/step/11?unit=20504
+TODO
+{--
+Неудачное сопоставление с образцом для реализованного на предыдущих видео-степах 
+трансформера `StateT` аварийно прерывает вычисление:
+
+GHCi> sl2 = StateT $ \st -> [(st,st),(st+1,st-1)]
+GHCi> runStateT (do {6 <- sl2; return ()}) 5
+*** Exception: Pattern match failure in do expression ...
+
+Исправьте реализацию таким образом, чтобы обработка такой ситуации переадресовывалась бы внутренней монаде:
+
+GHCi> sl2 = StateT $ \st -> [(st,st),(st+1,st-1)]
+GHCi> runStateT (do {6 <- sl2; return ()}) 5
+[((),4)]
+GHCi> sm = StateT $ \st -> Just (st+1,st-1)
+GHCi> runStateT (do {42 <- sm; return ()}) 5
+Nothing
+--}
+newtype StateT s m a = StateT { runStateT :: s -> m (a,s) }
+
+state :: Monad m => (s -> (a, s)) -> StateT s m a
+state f = StateT (return . f)
+
+execStateT :: Monad m => StateT s m a -> s -> m s
+execStateT m = fmap snd . runStateT m 
+
+evalStateT :: Monad m => StateT s m a -> s -> m a
+evalStateT m = fmap fst . runStateT m
+
+instance Functor m => Functor (StateT s m) where
+  fmap f m = StateT $ \st -> fmap updater $ runStateT m st
+    where updater ~(x, s) = (f x, s)
+
+instance Monad m => Applicative (StateT s m) where
+  pure x = StateT $ \ s -> return (x, s)
+
+  f <*> v = StateT $ \ s -> do
+      ~(g, s') <- runStateT f s
+      ~(x, s'') <- runStateT v s'
+      return (g x, s'')
+
+instance Monad m => Monad (StateT s m) where
+  m >>= k  = StateT $ \s -> do
+    ~(x, s') <- runStateT m s
+    runStateT (k x) s'
+
+-- solution
+
+```
+test
+
+### 4.2.12 MonadTrans StateT lift
+
+Реализуем лифт вычислений во внутренней монаде во внешний `StateT`
+```hs
+instance MonadTrans (StateT s) where
+  lift :: (Monad m) => m a -> StateT s m a
+  lift m = StateT $ \st -> do -- залезаем во внутреннюю монаду (лямбда отражает структуру трансформера - стрелка из внешненго стейта)
+    a <- m -- вынимаем значение
+    return (a, st) -- перепаковываем в нужную нам пару
+
+-- example: сочетание эффектов стейта и списка
+
+sl3 = StateT $ \st -> [(st+1, 42), (st+2, st), (st+3, st*2)]
+
+ghci> runStateT (do { x <- sl3; f <- lift [pred, succ]; return (x, f x)}) 5
+-- стейт меняется только в первом вычислении; лифт и ретурн не могут менять стейт по определению.
+[ -- sl3 дает внешний цикл, туда попадает стейт 5; лифт дает внутренний цикл, две функции обработки значений
+  ((6,5),42), -- 5+1 42 pred
+  ((6,7),42), -- 5+1 42 succ
+  ((7,6),5), -- 5+2 st pred
+  ((7,8),5), -- 5+2 st succ
+  ((8,7),10), -- 5+3 st*2 pred
+  ((8,9),10)] -- 5+3 st*2 succ
+```
+repl
+
+### 4.2.13 StateT get, put, modify
+
+Реализуем стандартный интерфейс: `get, put, modify`
+```hs
+-- запаковка переданного снаружи стейта в пару и полиморфную монаду (через конструктор `state`)
+get :: (Monad m) => StateT s m s
+get = state $ \s -> (s, s) -- вернуть внешний стейт
+
+-- аналогично `get` но внешний стейт игнорится а явно переданный упаковывается
+put :: (Monad m) => s -> StateT s m ()
+put s = state $ \_ -> ((), s) -- положить данный стейт
+
+-- аналогично, но теперь есть функция преобразования стейта,
+-- преобразованный внешний стейт запаковывается
+modify :: (Monad m) => (s -> s) -> StateT s m ()
+modify f = state $ \s -> ((), f s) -- преобразовать и положить внешний стейт
+
+-- Никакого взаимодействия в внутренней монадой, работаем только со стейтом;
+
+-- example
+
+sl3 = StateT $ \st -> [(st+1, 42), (st+2, st), (st+3, st*2)] -- внутренняя монада списка
+ghci> runStateT (do {sl3; y <- get; put (y - 2); return (2 * y) }) 5
+[(84,40), -- 2*42, 42-2
+(10,3),   -- 2*5, 5-2
+(20,8)]   -- 2*10, (5*2)-2
+-- ретурн кладет в первое значение пары `2 * y`
+-- где уай это стейт из предыдущего шага пайплайна (get дает нам стейт)
+-- в итоге вычисления значений из первого шага просто игнорятся
+
+```
+repl
+
+```hs
+https://stepik.org/lesson/38579/step/14?unit=20504
+TODO
+{--
+Те из вас, кто проходил первую часть нашего курса, конечно же помнят, последнюю задачу из него. 
+В тот раз всё закончилось монадой `State`, но сейчас с неё все только начинается!
+
+data Tree a = Leaf a | Fork (Tree a) a (Tree a)
+
+Вам дано значение типа `Tree ()`, иными словами, вам задана форма дерева. 
+От вас требуется сделать две вещи: 
+во-первых, пронумеровать вершины дерева, обойдя их `in-order` обходом (левое поддерево, вершина, правое поддерево); 
+во-вторых, подсчитать количество листьев в дереве.
+
+GHCi> numberAndCount (Leaf ())
+(Leaf 1,1)
+GHCi> numberAndCount (Fork (Leaf ()) () (Leaf ()))
+(Fork (Leaf 1) 2 (Leaf 3),2)
+
+Конечно, можно решить две подзадачи по-отдельности, но мы сделаем это всё за один проход. 
+Если бы вы писали решение на императивном языке, вы бы обошли дерево, 
+поддерживая в одной переменной следующий доступный номер для очередной вершины, 
+а в другой — количество встреченных листьев, причем само значение второй переменной,
+по сути, в процессе обхода не требуется. 
+
+Значит, вполне естественным решением будет завести состояние для первой переменной, а количество листьев накапливать в «логе»-моноиде.
+
+Вот так выглядит код, запускающий наше вычисление и извлекающий результат:
+
+numberAndCount :: Tree () -> (Tree Integer, Integer)
+numberAndCount t = getSum <$> runWriter (evalStateT (go t) 1)
+  where
+    go :: Tree () -> StateT Integer (Writer (Sum Integer)) (Tree Integer)
+    go = undefined
+
+Вам осталось только описать само вычисление — функцию `go`
+--}
+go :: Tree () -> StateT Integer (Writer (Sum Integer)) (Tree Integer)
+go = undefined
+
+-- solution
+
+```
+test
+
+## chapter 4.3, Трансформер ExceptT
+
+https://stepik.org/lesson/38580/step/1?unit=20505
+
+- Тип ExceptT
+- Функтор ExceptT
+- Аппликативный функтор ExceptT
+- Монада ExceptT
+- Лифтинг и стандартный интерфейс для ExceptT
+- Примеры работы с ExceptT
+- Исправленная версия Applicative для ExceptT
 
 
 
