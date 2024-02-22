@@ -137,12 +137,12 @@ instance Functor m => Functor (StateT s m) where
   fmap f m = StateT $ \st -> fmap updater $ runStateT m st
     where updater ~(x, s) = (f x, s)
 
-instance Monad m => Applicative (StateT s m) where
+instance (Monad m) => Applicative (StateT s m) where
   pure :: a -> StateT s m a
-  pure x = StateT $ \ s -> return (x, s)
+  pure x = StateT $ \s -> return (x, s)
 
   (<*>) :: StateT s m (a -> b) -> StateT s m a -> StateT s m b
-  f <*> v = StateT $ \ s -> do
+  f <*> v = StateT $ \s -> do
       ~(g, s') <- runStateT f s
       ~(x, s'') <- runStateT v s'
       return (g x, s'')
@@ -167,3 +167,66 @@ put s = state $ \_ -> ((), s)
 
 modify :: Monad m => (s -> s) -> StateT s m ()
 modify f = state $ \s -> ((), f s)
+
+
+-- import Control.Applicative (liftA2)
+-- newtype Except e a = Except { runExcept :: Either e a } -- двух-параметрический конструктор
+newtype ExceptT e m a = ExceptT { runExceptT :: m (Either e a) }
+-- довольно просто, нет стрелочных типов, есть тип-сумма Either, завернутый в абстрактную монаду
+
+-- тривиальный конструктор, берет ийзер и заворачивает его в монаду и в иксептТ
+except :: (Monad m) => Either e a -> ExceptT e m a
+except = ExceptT . return
+
+instance (Functor m) => Functor (ExceptT e m) where
+  fmap :: (a -> b) -> ExceptT e m a -> ExceptT e m b
+  fmap f = ExceptT . fmapper . runExceptT where fmapper = fmap (fmap f)
+  -- фмап для ийзер и фмап для абстрактной монады эм (которая также функтор)
+
+{--
+-- реализация не соответствует семантике иксепта, см. лекции
+instance (Applicative m) => Applicative (ExceptT e m) where
+  pure = ExceptT . pure . Right -- также, просто упаковка по слоям, пюре это внутренняя абстрактная монада эм
+
+  f <*> v = ExceptT $ liftA2 updater (runExceptT f) (runExceptT v) where -- n.b. liftA2
+    updater (Left e) _ = Left e
+    updater (Right g) x = fmap g x
+-- почему это один-в-один повторяет Applicative Except?
+-- потому, что лифт поднимает этот код в промежуточный слой этой нашей абстрактной монады,
+-- получается красиво, лифт это круто.
+--   f <*> v = ExceptT $ liftA2 (<*>) (runExceptT f) (runExceptT v) -- вариант с аплайд овер для аппликатива Either
+-- `(<*>) (runExceptT f) (runExceptT v)` вот это поднимается лифтом в абстрактрую монаду (здесь аппликатив)
+--}
+-- корректная реализация
+instance (Monad m) => Applicative (ExceptT e m) where
+  pure x = ExceptT $ pure (Right x)
+  (ExceptT mef) <*> (ExceptT mea) = ExceptT $ do -- залезли в монаду нижнего слоя
+    ef <- mef -- из монады в которой лежит `Either e f` вынимаем этот ийзер
+    case ef of -- и в зависимости от значения типа-суммы:
+      Left  e -> return $ Left e -- ошибка, двигаем ошибку и ничего не делаем, только пакуем ошибку в монаду `m`
+      Right f -> fmap (fmap f) mea -- поднимаем функцию эф через два слоя, happy path
+
+instance (Monad m) => Monad (ExceptT e m) where
+  m >>= k = ExceptT $ do -- залезли во внутреннюю монаду, работаем с Either
+    a <- runExceptT m -- левое вычисление, a :: Either, (runExceptT m) :: Monad Either
+    case a of
+      Left e -> return (Left e) -- запакуем обратно в монаду
+      Right x -> runExceptT (k x) -- аналогично, но наоборот, распакуем в монаду (k x :: ExceptT)
+    
+--   fail = ExceptT . fail -- делегируем обработку ошибок во внутренний слой, монаду
+
+instance MonadTrans (ExceptT e) where
+  lift :: (Monad m) => m a -> ExceptT e m a
+  lift = ExceptT . (fmap Right) -- поднимаем конструктор Either в монаду m
+
+throwE :: (Monad m) => e -> ExceptT e m a
+throwE = ExceptT . return . Left -- последовательное заворачивание ошибки в слои оберток
+
+catchE :: (Monad m) => ExceptT e m a -> (e -> ExceptT e2 m a) -> ExceptT e2 m a
+m `catchE` h = ExceptT $ do -- ошибка и функция обработки ошибки (handler), уходим в монаду
+  a <- runExceptT m -- вынимаем из монады значение Either
+  case a of
+    Left  l -> runExceptT (h l) -- вынимаем монаду с обработанной ошибкой
+    Right r -> return (Right r) -- упаковываем в монаду правильный результат
+
+test f = runIdentity (runStateT (runExceptT f) 3)

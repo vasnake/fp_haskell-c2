@@ -706,7 +706,7 @@ repl
 Реализуем аппликативный функтор для трансформера `StateT`.
 Аппликатив уже может (и делает) работать со стейтом.
 Кстати, тут стейт прокидывается (и модифицируется) по цепочке (в отличие от ридера).
-Не может работать со структурой; влияние левого вычисления на правое и структуру результата: забота монады.
+Аппликатив не может работать со структурой; влияние левого вычисления на правое и структуру результата: забота монады.
 ```hs
 -- для простого аппликатива стейт было так:
 instance Applicative (State s) where
@@ -736,7 +736,8 @@ instance (Monad m) => Applicative (StateT s m) where
       ~(x, s'') <- runStateT v s'
       return (g x, s'')
 -- обратите внимание: заменить контекст (Monad m) на (Applicative m) не получается,
--- интерфейс аппликатива не дает возможности разобрать пару, находящуюся под барьером аппликатива.
+-- интерфейс аппликатива не дает возможности прокинуть эффект (повлиять) на второе вычисление,
+-- только монада может позволить левому вычислению влиять на правое
 
 -- example
 
@@ -980,6 +981,538 @@ https://stepik.org/lesson/38580/step/1?unit=20505
 - Лифтинг и стандартный интерфейс для ExceptT
 - Примеры работы с ExceptT
 - Исправленная версия Applicative для ExceptT
+
+### 4.3.2 newtype ExceptT
+
+Монада Except, с эффектом обработки ошибочных ситуаций (под капотом Either).
+Трансформер для этой монады, соответственно, ExceptT.
+Будем реализовывать логику иксепта, навернутого на произвольную монаду.
+Как и ранее, опираясь на ранее рассмотренную логику монады Except
+```hs
+import Control.Applicative (liftA2)
+
+newtype Except e a = Except { runExcept :: Either e a } -- двух-параметрический конструктор
+
+newtype ExceptT e m a = ExceptT { runExceptT :: m (Either e a) }
+-- довольно просто, нет стрелочных типов, есть тип-сумма Either, завернутый в абстрактную монаду
+
+-- тривиальный конструктор, берет ийзер и заворачивает его в монаду и в иксептТ
+except :: (Monad m) => Either e a -> ExceptT e m a
+except = ExceptT . return
+
+-- example
+
+ghci> runExceptT (except $ Right 42) :: [Either String Int]
+[Right 42]
+-- если не подсказать типы компайлеру, то сам он их не выведет: тип монады неизвестен, как и тип ошибки
+ghci> :t runExceptT (except $ Right 42)
+runExceptT (except $ Right 42)
+  :: (Monad m, Num a) => m (Either e a)
+
+```
+repl
+
+### 4.3.3 Functor ExceptT
+
+Реализуем функтор для ExceptT
+```hs
+instance Functor (Except e) where -- связали один параметр, второй свободен
+  fmap :: (a -> b) -> Except e a -> Except e b
+  fmap f = Except . (fmap f) . runExcept -- тип не стрелочный, лямбд не будет. Будет опора на факт, что Either это функтор.
+  -- логика трамвайная: распаковали эйзер, подняли фмапом туда функцию, результат заапаковали обратно в иксепт.
+
+instance (Functor m) => Functor (ExceptT e m) where
+  fmap :: (a -> b) -> ExceptT e m a -> ExceptT e m b
+  fmap f = ExceptT . fmapper . runExceptT where fmapper = fmap (fmap f)
+  -- фмап для ийзер и фмап для абстрактной монады эм (которая также функтор)
+
+-- example
+
+ghci> runExceptT (fmap (+9) (except $ Right 42)) :: [Either String Int]
+[Right 51]
+
+ghci> runExceptT (fmap undefined (except $ Left "foo")) :: [Either String Int]
+[Left "foo"] -- для случая "ошибки" никакой обработки нет, ошибка протаскивается по цепочке
+-- функция (андефайнед) даже и не вызывается
+
+```
+repl
+
+### 4.3.4 Applicative ExceptT
+
+Реализуем аппликатив для ExceptT
+```hs
+instance Applicative (Except e) where
+  pure = Except . Right -- просто упаковка значения в слои обвязок
+
+-- f и v это стрелка и значение параметра для стрелки, упакованные в слои Either и Except
+-- поэтому вся логика заключается в снятии и накручивании слоев
+  f <*> v = Except $ updater (runExcept f) (runExcept v) where
+    updater (Left e) _ = Left e -- с этим понятно, пропихиваем ошибку
+    updater (Right g) x = fmap g x -- икс это Either, который функтор, поэтому фмап
+-- если посмотреть внимательно, то можно заметить, что апдейтер повторяет реализацию оператора "аплайд овер"
+-- для аппликатива Either. Поэтому можно сделать так:
+  f <*> v = Except $ (runExcept f) <*> (runExcept v) -- вынули Either и сделали "f applied over v"
+
+instance (Applicative m) => Applicative (ExceptT e m) where
+  pure = ExceptT . pure . Right -- также, просто упаковка по слоям, пюре это внутренняя абстрактная монада эм
+
+  f <*> v = ExceptT $ liftA2 updater (runExceptT f) (runExceptT v) where -- n.b. liftA2
+    updater (Left e) _ = Left e
+    updater (Right g) x = fmap g x
+-- почему это один-в-один повторяет Applicative Except?
+-- потому, что лифт поднимает этот код в промежуточный слой этой нашей абстрактной монады,
+-- получается красиво, лифт это круто
+  f <*> v = ExceptT $ liftA2 (<*>) (runExceptT f) (runExceptT v) -- вариант с аплайд овер для аппликатива Either
+-- `(<*>) (runExceptT f) (runExceptT v)` вот это поднимается лифтом в абстрактрую монаду (здесь аппликатив)
+
+-- example: эффект ошибки есть, эффект внутренней монады (списка) есть. работает
+
+ghci> runExceptT $ (except $ Right (^2)) <*> (except $ Right 3) :: [Either String Int]
+[Right 9]
+ghci> runExceptT $ (except $ Left "foo") <*> (except $ Right 3) :: [Either String Int]
+[Left "foo"]
+ghci> runExceptT $ (except $ Right (^2)) <*> (except $ Left "bar") :: [Either String Int]
+[Left "bar"]
+
+```
+repl
+
+Композиция аппликативных функторов является аппликативным функтором.
+Но как мы увидим позднее, такая реализация "не совсем хорошая", в стдлиб сделано иначе.
+Интрига.
+
+### 4.3.5 Monad ExceptT
+
+Реализуем монаду ExceptT
+```hs
+instance Monad (Except e) where
+  m >>= k = Except $ case runExcept m of -- левое вычисление
+    Left e -> Left e -- пропихиваем ошибку
+    Right x -> runExcept (k x) -- ошибки слева нет, запускаем стрелку Клейсли (правое вычисление)
+
+instance (Monad m) => Monad (ExceptT e m) where
+  m >>= k = ExceptT $ do -- залезли во внутреннюю монаду, работаем с Either
+    a <- runExceptT m -- левое вычисление, a :: Either, (runExceptT m) :: Monad Either
+    case a of
+      Left e -> return (Left e) -- запакуем обратно в монаду
+      Right x -> runExceptT (k x) -- аналогично, но наоборот, распакуем в монаду (k x :: ExceptT)
+    
+  fail = ExceptT . fail -- делегируем обработку ошибок во внутренний слой, монаду
+  -- потому что ничего содержательного здесь мы сделать не можем
+
+-- example
+
+ghci> runExceptT $ do { f <- except $ Right (^2); x <- except $ Right 3; return $ f x } :: [Either String Int]
+[Right 9] -- иллюстрация хеппи-пас для байнда
+
+```
+repl
+
+```hs
+https://stepik.org/lesson/38580/step/6?unit=20505
+TODO
+{--
+Представьте, что друг принес вам игру. В этой игре герой ходит по полю. За один ход он может переместиться на одну клетку вверх, вниз, влево и вправо (стоять на месте нельзя). На поле его поджидают различные опасности, такие как пропасти (chasm) и ядовитые змеи (snake). Если игрок наступает на клетку с пропастью или со змеёй, он умирает.
+
+data Tile = Floor | Chasm | Snake
+  deriving Show
+
+data DeathReason = Fallen | Poisoned
+  deriving (Eq, Show)
+
+Карта задается функцией, отображающей координаты клетки в тип этой самой клетки:
+
+type Point = (Integer, Integer)
+type GameMap = Point -> Tile
+
+Ваша задача состоит в том, чтобы реализовать функцию
+
+moves :: GameMap -> Int -> Point -> [Either DeathReason Point]
+
+принимающую карту, количество шагов и начальную точку, а возвращающую список всех возможных исходов (с повторениями), если игрок сделает заданное число шагов из заданной точки. 
+
+Заодно реализуйте функцию
+
+waysToDie :: DeathReason -> GameMap -> Int -> Point -> Int
+
+показывающую, сколькими способами игрок может умереть данным способом, сделав заданное число шагов из заданной точки.
+
+Например, для такого поля:
+
+поле в виде рисунка:
+ | 0 1 2 3 4 5
+--------------
+0| o o o o o o
+1| o       s o
+2| o   s     o
+3| o         o
+4| o         o
+5| o o o o o o
+закодировано как:
+
+map1 :: GameMap
+map1 (2, 2) = Snake
+map1 (4, 1) = Snake
+map1 (x, y)
+  | 0 < x && x < 5 && 0 < y && y < 5 = Floor
+  | otherwise                        = Chasm
+
+ожидаются такие ответы:
+
+GHCi> waysToDie Poisoned map1 1 (4,2)
+1  -- можно пойти к змее наверх
+GHCi> waysToDie Poisoned map1 2 (4,2)
+2  -- можно пойти к змее наверх или к змее влево
+GHCi> waysToDie Poisoned map1 3 (4,2)
+5  -- за три шага к левой змее, по-прежнему можно дойти одним способом,
+   -- а к правой — уже четырьмя (вверх, влево-вверх-вправо,
+   --                            влево-вправо-вверх, вниз-вверх-вверх)
+GHCi> waysToDie Poisoned map1 4 (4,2)
+13
+
+Гарантируется, что изначально игрок стоит на пустой клетке.
+
+Подсказка: не забывайте, в каком уроке эта задача.
+--}
+moves :: GameMap -> Int -> Point -> [Either DeathReason Point]
+moves = undefined
+
+waysToDie :: DeathReason -> GameMap -> Int -> Point -> Int
+waysToDie = undefined
+
+-- solution
+
+```
+test
+
+### 4.3.7 lift, throwE, catchE
+
+Реализуем стандартный интерфейфс монады ExceptT
+```hs
+instance MonadTrans (ExceptT e) where
+  lift :: m a -> ExceptT e m a
+  lift = ExceptT . (fmap Right) -- поднимаем конструктор Either в монаду m
+
+throwE :: (Monad m) => e -> ExceptT e m a
+throwE = ExceptT . return . Left -- последовательное заворачивание ошибки в слои оберток
+
+catchE :: (Monad m) => ExceptT e m a -> (e -> ExceptT e2 m a) -> ExceptT e2 m a
+m `catchE` h = ExceptT $ do -- ошибка и функция обработки ошибки (handler), уходим в монаду
+  a <- runExceptT m -- вынимаем из монады значение Either
+  case a of
+    Left  l -> runExceptT (h l) -- вынимаем монаду с обработанной ошибкой
+    Right r -> return (Right r) -- упаковываем в монаду правильный результат
+
+```
+repl
+
+```hs
+https://stepik.org/lesson/38580/step/8?unit=20505
+TODO
+{--
+Следующий код
+
+import Control.Monad.Trans.Maybe
+import Data.Char (isNumber, isPunctuation)
+
+askPassword0 :: MaybeT IO ()
+askPassword0 = do
+  liftIO $ putStrLn "Enter your new password:"
+  value <- msum $ repeat getValidPassword0
+  liftIO $ putStrLn "Storing in database..."
+
+getValidPassword0 :: MaybeT IO String
+getValidPassword0 = do
+  s <- liftIO getLine
+  guard (isValid0 s)
+  return s
+
+isValid0 :: String -> Bool
+isValid0 s = length s >= 8
+            && any isNumber s
+            && any isPunctuation s
+
+используя трансформер `MaybeT` и свойства функции `msum`, 
+отвергает ввод пользовательского пароля, до тех пор пока он не станет удовлетворять заданным критериям. 
+Это можно проверить, вызывая его в интерпретаторе
+
+GHCi> runMaybeT askPassword0
+
+Используя пользовательский тип ошибки и трансформер `ExceptT` вместо `MaybeT`, 
+модифицируйте приведенный выше код так, чтобы он выдавал пользователю сообщение о причине, по которой пароль отвергнут.
+
+data PwdError = PwdError String
+
+type PwdErrorIOMonad = ExceptT PwdError IO
+
+askPassword :: PwdErrorIOMonad ()
+askPassword = do
+  liftIO $ putStrLn "Enter your new password:"
+  value <- msum $ repeat getValidPassword
+  liftIO $ putStrLn "Storing in database..."
+  
+getValidPassword :: PwdErrorIOMonad String
+getValidPassword = undefined
+
+Ожидаемое поведение:
+
+GHCi> runExceptT askPassword
+Enter your new password:
+qwerty
+Incorrect input: password is too short!
+qwertyuiop
+Incorrect input: password must contain some digits!
+qwertyuiop123
+Incorrect input: password must contain some punctuation!
+qwertyuiop123!!!
+Storing in database...
+GHCi>
+--}
+import Control.Monad.Trans.Except
+import Control.Monad.IO.Class (liftIO)
+import Data.Foldable (msum)
+import Data.Char (isNumber, isPunctuation)
+
+{- Не снимайте комментарий - эти объявления даны в вызывающем коде
+newtype PwdError = PwdError String
+
+type PwdErrorIOMonad = ExceptT PwdError IO
+
+askPassword :: PwdErrorIOMonad ()
+askPassword = do
+  liftIO $ putStrLn "Enter your new password:"
+  value <- msum $ repeat getValidPassword
+  liftIO $ putStrLn "Storing in database..."
+-}
+
+getValidPassword :: PwdErrorIOMonad String
+getValidPassword = undefined
+
+-- solution
+
+```
+test
+
+### 4.3.9 тестируем реализацию
+
+Поиграем с трансформерами, завернем в ExceptT монаду State,
+которая, в свою очередь сделана через трансформер StateT накрученный на Identity
+```hs
+import Control.Monad.Identity
+
+test f = runIdentity (runStateT (runExceptT f) 3)
+-- 3 это начальный стейт
+-- f это монада ExceptT, переданная снаружи
+-- функция тест распаковывает обертки, читать надо как "в последнюю очередь снимаем обертку айдентити"
+-- т.е. айдентити самая внутренняя обертка, самая внешняя: иксепт.
+-- ExceptT e (State s a) -- т.е. это внутри это так: m e a = State Either s = (Either e a, s)
+
+-- (except $ Right 42) >> lift (put 5)
+ghci> :t (except $ Right 42) >> (lift $ put 5)
+  :: (Monad m, Num s) => ExceptT e (StateT s m) () -- т.е. это внутри это так: m e a = State Either s = (Either e a, s)
+-- подготовка: тестовая монада иксепт, получена "правым" байндом монады `Right 42` в конструкторе иксепта, монада не указана,
+-- и монады `lift (put 5)` полученной лифтом монады стейта (пут) в монаду иксептТ
+-- не определены: тип ошибки и конкретизация монады внутри стейтТ
+
+ghci> :t test $ (except $ Right 42) >> (lift $ put 5)
+test $ (except $ Right 42) >> (lift $ put 5)
+  :: Num s => (Either e (), s) -- `put 5`  в качестве значения дает юнит `()`
+-- правый байнд игнорирует занчение левого выражения
+ghci> test $ (except $ Right 42) >> (lift $ put 5)
+(Right (),5)
+
+ghci> test $ (except $ Right 42) >> (lift $ modify (+1))
+(Right (),4) -- старый стейт 3 стал 4
+
+ghci> test $ throwE "foo" >> (lift $ modify (+1))
+(Left "foo",3) -- ошибка в левой части байнд была прокинута далее без изменений, ни лог ни значение
+-- правой стрелкой не поменялись
+
+ghci> test $ lift (modify (+2)) >> throwE "foo" >> (lift $ modify (+1))
+(Left "foo",5) -- до ошибки вычисления происходят и сохраняются в стейте
+
+-- как ранее говорили, реализация аппликатива через композицию аппликативов,
+-- не очень хорошая, смотрите:
+ghci> test $ lift (modify (+2)) *> throwE "foo" *> (lift $ modify (+1))
+(Left "foo",6) -- а должно быть `(Left "foo",5)`
+-- ибо по семантике, после ошибки следующие вычисления должны игнориться
+
+-- для справки:
+
+instance (Applicative m) => Applicative (ExceptT e m) where
+  pure = ExceptT . pure . Right
+  f <*> v = ExceptT $
+    liftA2 -- вот тут фигня получается, вычисление поднимается в монаду (в нашем случае аппликатив State)
+      updater (runExceptT f) (runExceptT v) where
+        updater (Left e) _ = Left e
+        updater (Right g) x = fmap g x
+
+instance Monad m => Applicative (StateT s m) where
+  pure x = StateT $ \ s -> return (x, s)
+  f <*> v = StateT $ \s -> do -- в данном случае монада айдентити
+      ~(g, s') <- runStateT f s
+      ~(x, s'') <- runStateT v s'
+      return (g x, s'') -- и возвращаем измененный стейт, вот он, негодяй, из которого выходит `6`
+
+```
+repl
+
+### 4.3.10 корректный Applicative ExceptT
+
+Аппликатив построен так, чтобы эффекты не зависили от значения,
+цепочка вычислений в аппликативе тупо накапливает эффекты.
+В монаде это не так, монада отличается от аппликатива: эффект второго вычисления зависит от
+результата первого вычисления (левый - правый в операторе байнд).
+
+В трансформере та же история, для обоих слоев, в аппликативе эффекты накапливаются,
+не могут взаимодействовать.
+
+Это противоречит семантике `Except`: при возникновении ошибки цепочка прерывается и дальше идет ошибка.
+
+Поэтому надо потребовать, чтобы внутренний слой в аппликативе `ExceptT` был монадой, тогда мы можем повлиять на эффекты.
+```hs
+-- предыдущая некорректная реализация: композиция аппликативов, противоречит семантике
+instance (Applicative m) => Applicative (ExceptT e m) where
+  pure = ExceptT . pure . Right
+  f <*> v = ExceptT $ liftA2 <*> (runExceptT f) (runExceptT v) 
+
+-- реализация завязанная на монаду внутреннего слоя, поведение соответствует семантике
+instance (Monad m) => Applicative (ExceptT e m) where
+  pure x = ExceptT $ pure (Right x)
+  (ExceptT mef) <*> (ExceptT mea) = ExceptT $ do -- залезли в монаду нижнего слоя
+    ef <- mef -- из монады в которой лежит `Either e f` вынимаем этот ийзер
+    case ef of -- и в зависимости от значения типа-суммы:
+      Left  e -> return $ Left e -- ошибка, двигаем ошибку и ничего не делаем, только пакуем ошибку в монаду `m`
+      Right f -> fmap (fmap f) mea -- поднимаем функцию эф через два слоя, happy path
+
+-- demo
+
+test f = runIdentity (runStateT (runExceptT f) 3)
+ghci> :t test
+test :: Num s => ExceptT e (StateT s Identity) a -> (Either e a, s)
+
+ghci> test $ lift (modify (+2)) >> throwE "foo" >> (lift $ modify (+1))
+(Left "foo",5) -- корректный результат, после ошибки ничего не делали
+
+-- предыдущая реализация аппликатива через композицию аппликативов,
+-- не очень хорошая, смотрите:
+-- ghci> test $ lift (modify (+2)) *> throwE "foo" *> (lift $ modify (+1))
+
+-- корректный результат
+ghci> test $ lift (modify (+2)) *> throwE "foo" *> (lift $ modify (+1))
+(Left "foo",5)
+
+```
+repl
+
+```hs
+{--
+Попробуйте предположить, каким ещё трансформерам для реализации правильного представителя класса `Applicative` не достаточно, 
+чтобы внутренний контейнер был лишь аппликативным функтором, а нужна полноценная монада?
+
+Select all correct options from the list
+
+- MaybeT
+- ValidateT
+- IdentityT
+- ReaderT
+- WriterT
+- StateT
+- ListT
+--}
+
+-- solution
+
+- MaybeT -- более бледная версия Either, рассуждения такие же как про ExceptT
+
+- StateT -- на лекциях рассматривали, но почему внутренний слой должен быть монадой:
+-- врде потому, что сложная внутренняя структура `s -> (a, s)` не доступна внутри аппликатива?
+-- Или потому, что семантика требует прокидывания стейта, полученного (измененного) левым вычислением,
+-- в правое вычисление? В аппликативе такое не возможно по определению. Думаю да, такой ответ правильный.
+
+instance (Monad m) => Applicative (StateT s m) where
+  pure :: a -> StateT s m a
+  pure x = StateT $ \s -> return (x, s)
+
+  (<*>) :: StateT s m (a -> b) -> StateT s m a -> StateT s m b
+  f <*> v = StateT $ \s -> do
+      ~(g, s') <- runStateT f s
+      ~(x, s'') <- runStateT v s'
+      return (g x, s'')
+
+```
+test
+
+```hs
+https://stepik.org/lesson/38580/step/12?unit=20505
+TODO
+{--
+Вспомним функцию `tryRead`:
+
+data ReadError = EmptyInput | NoParse String
+  deriving Show
+
+tryRead :: Read a => String -> Except ReadError a
+
+Измените её так, чтобы она работала в трансформере `ExceptT`
+--}
+tryRead :: (Read a, Monad m) => String -> ExceptT ReadError m a
+tryRead = undefined
+
+-- solution
+-- > Вспомним функцию tryRead
+-- Из задачи 3.1.8
+
+```
+test
+
+```hs
+https://stepik.org/lesson/38580/step/13?unit=20505
+TODO
+{--
+С деревом мы недавно встречались:
+
+data Tree a = Leaf a | Fork (Tree a) a (Tree a)
+
+Вам на вход дано дерево, содержащее целые числа, записанные в виде строк. 
+Ваша задача обойти дерево `in-order` (левое поддерево, вершина, правое поддерево) и просуммировать числа до первой строки, 
+которую не удаётся разобрать функцией `tryRead` из прошлого задания (или до конца дерева, если ошибок нет). 
+Если ошибка произошла, её тоже надо вернуть.
+
+Обходить деревья мы уже умеем, так что от вас требуется только функция `go`, подходящая для такого вызова:
+
+treeSum t = let (err, s) = runWriter . runExceptT $ traverse_ go t
+            in (maybeErr err, getSum s)
+  where
+    maybeErr :: Either ReadError () -> Maybe ReadError
+    maybeErr = either Just (const Nothing)
+
+GHCi> treeSum $ Fork (Fork (Leaf "1") "2" (Leaf "oops")) "15" (Leaf "16")
+(Just (NoParse "oops"),3)
+GHCi> treeSum $ Fork (Fork (Leaf "1") "2" (Leaf "0")) "15" (Leaf "16")
+(Nothing,34)
+--}
+go :: String -> ExceptT ReadError (Writer (Sum Integer)) ()
+go = undefined
+
+-- solution
+-- это продолжение задачек на дерево, ранее реализованное на сервере уже есть, повторно копипастить не надо
+
+```
+test
+
+## chapter 4.4, Неявный лифтинг
+
+https://stepik.org/lesson/38581/step/1?unit=20506
+
+- Проблема лифтинга
+- Мультипараметрические классы типов
+- Функциональные зависимости
+- Класс типов для стандартного интерфейса
+- Класс типов MonadWriter
+- Представители класса MonadWriter
+- Интерфейсы для доступа к WriterT с неявным лифтингом и без него
 
 
 
