@@ -47,3 +47,5 @@ https://stackoverflow.com/questions/23342184/difference-between-monad-and-applic
 - Continuation passing style https://en.wikibooks.org/wiki/Haskell/Continuation_passing_style
 - The Evolution of a Haskell Programmer https://willamette.edu/~fruehr/haskell/evolution.html
 - ListT done right https://wiki.haskell.org/ListT_done_right
+- Understanding Functional Dependencies via Constraint Handling Rules https://www.google.com/search?q=Understanding+Functional+Dependencies+via+Constraint+Handling+Rules
+- Functional dependencies https://wiki.haskell.org/Functional_dependencies

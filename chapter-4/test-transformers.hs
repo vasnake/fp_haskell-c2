@@ -1,6 +1,8 @@
 -- {-# LANGUAGE TypeOperators #-} -- для разрешения `|.|` в качестве имени оператора над типами
 -- {-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE InstanceSigs #-} -- позволяет писать сигнатуры для инстансов
+{-# LANGUAGE FunctionalDependencies #-}
+-- {-# LANGUAGE MultiParamTypeClasses #-}
 
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 {-# OPTIONS_GHC -Wno-noncanonical-monad-instances #-}
@@ -43,7 +45,7 @@ import Data.Traversable (
     sequence, sequenceA, Traversable(..), traverse, fmapDefault, foldMapDefault, mapM
     )
 
--- import Control.Monad ( liftM, mplus, guard, mfilter, ap, guard, MonadPlus(..), when )
+import Control.Monad ( liftM, mplus, guard, mfilter, ap, guard, MonadPlus(..), when )
 -- import Control.Monad.Cont ( callCC )
 -- import Control.Monad (liftM, ap, MonadPlus(..), guard, msum)
 -- import Control.Applicative (Alternative(..))
@@ -63,7 +65,7 @@ import Prelude (
     (==), (*), id, const, Maybe(..), null, ($), succ, pred, (.), undefined, Num(..), Show, Eq,
     foldr, foldl, Either(..), Monoid(..), Semigroup(..), putStrLn, print, (*), (>), (/), (^),
     map, (=<<), (>>=), return, flip, (++), fail, Ord(..), (>>), take, Monad(..),
-    Double, either, Integer, head, tail, IO(..), snd
+    Double, either, Integer, head, tail, IO(..), snd, pi, fromIntegral,
     )
 
 -- newtype Writer w a = Writer { runWriter :: (a, w) } -- было
@@ -229,4 +231,42 @@ m `catchE` h = ExceptT $ do -- ошибка и функция обработки
     Left  l -> runExceptT (h l) -- вынимаем монаду с обработанной ошибкой
     Right r -> return (Right r) -- упаковываем в монаду правильный результат
 
-test f = runIdentity (runStateT (runExceptT f) 3)
+testE :: (Num s) => ExceptT e (StateT s Identity) a -> (Either e a, s)
+testE f = runIdentity (runStateT (runExceptT f) 3) -- s: state, e: error, a: any
+
+
+type SiWs = StateT Integer (WriterT String Identity)
+-- state int, writer string: стейт (инт) поверх врайтера (стринг)
+
+test :: SiWs () -- значение: юнит (пустой тупль)
+test = do
+  x <- get -- взяли стейт
+  when (x > 100) (lift $ tell "Overflow") -- записали в лог (через лифт)
+  put 42 -- положили стейт (если нет переполнения)
+
+runSiWs :: SiWs a -> Integer -> ((a, Integer), String)
+runSiWs m = runIdentity . runWriterT . (runStateT m)
+
+
+-- {-# LANGUAGE MultiParamTypeClasses #-}
+infixl 7 ***
+-- class Mult a b c where -- мульти-параметрический тайп-класс
+--   (***) :: a -> b -> c -- сделаем его пригодным для умножения разный типов чисел
+
+instance Mult Int Int Int where
+  (***) = (*)
+
+instance Mult Double Double Double where
+  (***) = (*)
+
+instance Mult Int Double Double where
+  i *** d = fromIntegral i * d
+
+instance Mult Double Int Double where
+  d *** i = d * fromIntegral i
+
+-- {-# LANGUAGE FunctionalDependencies #-}
+class Mult a b c | a b -> c where
+  (***) :: a -> b -> c
+-- `| a b -> c`
+-- описана зависимость, говорящая (в конечном итоге) что тип выхода определяется типами входа

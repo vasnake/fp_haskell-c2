@@ -1300,7 +1300,7 @@ test
 которая, в свою очередь сделана через трансформер StateT накрученный на Identity
 ```hs
 import Control.Monad.Identity
-
+test :: (Num s) => ExceptT e (StateT s Identity) a -> (Either e a, s)
 test f = runIdentity (runStateT (runExceptT f) 3)
 -- 3 это начальный стейт
 -- f это монада ExceptT, переданная снаружи
@@ -1513,6 +1513,797 @@ https://stepik.org/lesson/38581/step/1?unit=20506
 - Класс типов MonadWriter
 - Представители класса MonadWriter
 - Интерфейсы для доступа к WriterT с неявным лифтингом и без него
+
+### 4.4.2 проблема с `lift (tell ...)`
+
+Мы разобрали либу transformers, но настоящие профи работают с либой MTL,
+надстройкой над трансформерами. Там есть некоторые удобства ...
+```hs
+-- подготовим демо, используя реализованные нами монады
+type SiWs = StateT Integer (WriterT String Identity)
+-- state int, writer string: стейт (инт) поверх врайтера (стринг)
+-- врайтер (a, w) завернут внутрь стейта s -> (a, s)
+-- это кодируется как данные стейта внутри пары врайтера
+-- ((a, w), s) плюс, на самом деле, стрелка из начального стейта
+
+test :: SiWs () -- значение: юнит (пустой тупль)
+test = do
+  x <- get -- взяли стейт
+  when (x > 100) (lift $ tell "Overflow") -- записали в лог (через лифт), если условие сработало
+  put 42 -- положили стейт (в любом случае)
+
+-- `when :: Applicative f => Bool -> f () -> f ()`
+-- ранее участвовал при изучении CPS, `callCC` использовал эту функцию для "прерывания",
+-- но, вообще-то, `when` просто выполняет второе выражение при условии в первом:
+
+runSiWs :: SiWs a -> Integer -> ((a, Integer), String)
+runSiWs m = runIdentity . runWriterT . (runStateT m)
+-- ((a, Integer), String): (a, Integer): state как пара
+-- (pair, String): writer, лог как строка
+-- SiWs a -> Integer : два параметра, наша матрешка-монада и начальный стейт
+
+ghci> runSiWs test 33
+(((),42),"") -- пустой лог-строка, в стейт положили 42
+
+ghci> runSiWs test 133
+(((),42),"Overflow") -- в лог попала запись
+
+-- вроде работает как положено, но мы недовольны,
+test = do
+  x <- get
+  when (x > 100) (lift $ tell "Overflow") -- вызов tell возможен только если знать устройство матрешки
+  put 42
+-- мы хотим иметь get, put, tell на верхнем уровне
+-- это можно сделать, используя расширения языка Хаскелл
+```
+repl
+
+### 4.4.3 class Mult a b c (MultiParamTypeClasses)
+
+Мульти-параметрические классы типов (тайпклассы). Расширение `MultiParamTypeClasses`.
+
+Вообще, тайпкласс имеет один параметр всегда, это описание конструктора типов с одним параметром.
+Именно так реализуется ад-хок полиморфизм.
+
+При нескольких параметрах, тайп-класс должен как-то описывать связть между типами, представленными этими параметрами.
+```hs
+-- разберем пример
+{-# LANGUAGE MultiParamTypeClasses #-}
+
+ghci> :t (*)
+(*) :: Num a => a -> a -> a -- мономорфный оператор
+
+infixl 7 ***
+
+class Mult a b c where -- мульти-параметрический тайп-класс
+  (***) :: a -> b -> c -- сделаем его пригодным для умножения разный типов чисел
+
+instance Mult Int Int Int where
+  (***) = (*)
+
+instance Mult Double Double Double where
+  (***) = (*)
+
+instance Mult Int Double Double where
+  i *** d = fromIntegral i * d
+
+instance Mult Double Int Double where
+  d *** i = d * fromIntegral i
+
+ghci> x = 2 :: Int
+ghci> y = pi :: Double
+
+ghci> x *** y :: Double
+6.283185307179586
+
+```
+repl
+
+### 4.4.4 `LANGUAGE FunctionalDependencies`
+
+Продолжение, как выглядит "волшебная пилюля" для пояснения компайлеру выводимых типов
+в мульти-параметрических тайп-классах
+```hs
+-- при вызове
+x *** y :: Double
+-- компайлер нашел инстанс
+instance Mult Int Double Double where
+  i *** d = fromIntegral i * d
+
+-- если же целевой тип не указать, поимеем ошибку
+ghci> x *** y
+<interactive>:15:1: error:     • No instance for (Mult Int Double ()) 
+-- компайлер не стал догадываться и искать и выбирать варианты, просто послал нас нахер
+-- при отсутствии точной спецификации
+
+-- этой проблеме можно прописать таблетку: FunctionalDependencies
+{-# LANGUAGE FunctionalDependencies #-}
+
+class Mult a b c | a b -> c where
+  (***) :: a -> b -> c
+-- `| a b -> c`
+-- описана зависимость, говорящая (в конечном итоге) что тип выхода определяется типами входа
+
+ghci> x = 2 :: Int
+ghci> y = pi :: Double
+ghci> x *** y -- no problemo
+6.283185307179586
+
+-- вот на этом механизме и будем избавляться от ручного лифтинга в матрешках трансформеров
+
+```
+repl
+
+```hs
+https://stepik.org/lesson/38581/step/5?unit=20506
+TODO
+{--
+Предположим мы хотим реализовать следующую облегченную версию функтора, используя многопараметрические классы типов:
+
+class Functor' c e where
+  fmap' :: (e -> e) -> c -> c
+
+Добавьте в определение этого класса типов необходимые функциональные зависимости 
+и реализуйте его представителей для списка и `Maybe` так, 
+чтобы обеспечить работоспособность следующих вызовов
+
+GHCi> fmap' succ "ABC"
+"BCD"
+GHCi> fmap' (^2) (Just 42)
+Just 1764
+--}
+{-# LANGUAGE FunctionalDependencies #-}
+{-# LANGUAGE FlexibleInstances #-}
+class Functor' c e where
+  fmap' :: (e -> e) -> c -> c
+
+-- solution
+
+```
+test
+
+### 4.4.6 рассуждения про интерфейсы
+
+Так как же нам заменить `lift (tell ...)` на `tell ...` при работе с трансформерами?
+Для начала, внесем нужные функции (tell) внутрь тайпкласса ...
+Короче, идея простая: явно определить нужные интерфейсы для используемых монад.
+
+Если внутри трансформера есть монада врайтер с интерфейсом `tell`, то и трансформер должен иметь этот интерфейс (API).
+
+### 4.4.7 `MonadWriter w m | m -> w`
+
+Начнем реализацию мультипараметрического тайп-класса,
+выставляющего интерфейс монады `Writer` (пара `(a :: any, w :: Monoid)`)
+```hs
+{-# LANGUAGE FunctionalDependencies #-}
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE UndecidableInstances #-}
+module WriterClass where
+import MonadTrans -- (lift)
+import StateT
+...
+import qualified WriterT -- содержимое этого модуля будет доступно только с префиксом WriterT.
+-- подгрузили наши трансформеры из либ
+
+-- создадим мульти-параметрический тайп-класс, описывающий интерфейс монады Writer
+-- что (напоминаю) внутри кодируется как `(a, w)` где `w` это моноид лога
+-- мы говорим, что инстанс этого тайп-класса, получивший на вход монаду эм и моноид даблю,
+-- будет внутри иметь монаду Writer и обладать ее интерфейсом
+class (Monoid w, Monad m) => MonadWriter w m | m -> w where -- лог: моноид, эм: монада
+-- `| m -> w`: тип лога выводится из типа монады, т.е.
+-- этот конструктор типов берет два параметра: тип монады и тип лога и,
+-- при указании типа монады выводит тип лога
+-- другими словами, мы абстрагируемся от устройства монады, гарантируя, что она будет Writer
+
+  tell :: w -> m () -- tell :: Monad m => w -> WriterT w m ()
+-- ранее это была свободная функция, получала тип лога и возвращала матрешку (некую абстрактную монаду внутри врайтера)
+-- теперь это функция тайпкласса, которая запихивает лог в нашу (абстрактную) монаду, которая воспроизводит Writer,
+-- наблюдаем абстрагирование от деталей устройства монады (трансформера) в пользу соответствия интерфейсу
+
+  writer :: (a, w) -> m a -- -- writer :: (Monad m) => (a, w) -> WriterT w m a
+  listen :: m a -> m (a, w) -- listen :: Monad m => WriterT w m a -> WriterT w m (a, w)
+
+-- вспомогательная свободная функция, расширяет `listen` возможностью трансформировать лог через данную функцию
+listens :: (MonadWriter w m) => (w -> b) -> m a -> m (a, b)
+-- берет преобразователь лога, монаду-с-интерфейсом-врайтера, возвращает монаду-врайтер где в качестве лога лежит
+-- преобразованный лог из источника
+listens f m = do
+  ~(a, w) <- listen m
+  return (a, f w)
+
+```
+repl
+
+### 4.4.8 instance MonadWriter: (WriterT, StateT)
+
+Займемся реализацией инстансов.
+Наша задача: научить выставлять наружу интерфейс врайтера,
+для всех трансформеров у которых внутри врайтер
+```hs
+import qualified WriterT as W -- мы уже реализовали либу
+
+instance (Monoid w, Monad m) => MonadWriter w (W.WriterT w m) where
+-- `MonadWriter w (W.WriterT w m)`: описание типа монады для которой реализуется инстанс тайпкласса,
+-- это трансформер врайтера над логом `w` и произвольной монадой `m`
+  writer = W.writer
+  tell = W.tell
+  listen = W.listen
+
+instance (MonadWriter w m) => MonadWriter w (StateT s m) where
+-- `MonadWriter w (StateT s m)`: тип монады, реализующей интерфейс врайтера это трансформер стейт, внутри которого
+-- произвольная монада но только если она врайтер, что фиксируется требованием `(MonadWriter w m)`
+  writer = lift . writer
+  tell = lift . tell
+  listen m = StateT $ \s -> do -- мы знаем, что мы в трансформере стейт и можем его разворачивать,
+  -- мы знаем, что внутренняя монада дает нам интерфейс врайтера, воспользуемся этим
+    ~((a, s2), w) <- listen (runStateT m s) -- тут ничего интересного, просто перекладывание значений по парам,
+    -- согласно сигнатурам. Плюс, ленивость пат.мат.
+    return ((a, w), s2)
+
+```
+repl
+
+### 4.4.9 пример подключения mtl vs transformers
+
+Остались вопросы дизайна:
+в Хаскелл есть либа transformers и есть либа MTL.
+У них разные возможности совместимости, с разными версиями языка (были сделаны в разное время).
+МТЛ не доступно без расширений языка.
+```hs
+-- в стандартной либе есть два варианта
+-- https://hoogle.haskell.org/?hoogle=Writer&scope=set%3Ahaskell-platform
+-- module Control.Monad.Trans.Writer -- transformers
+-- module Control.Monad.Writer -- mtl (с мультипараметрическим тайп-классом)
+
+-- у нас есть модуль WriterT, где лифт используется явно, нет мультипараметрических тайп-классов
+-- и есть модуль WriterClass, где есть мультипараметрический тайп-класс врайтера
+-- и мы напишем модуль Writer где будет как-бы mtl версия врайтера
+
+module Writer ( -- export
+  MonadWriter(..),
+  listens,
+  WriterT(WriterT),
+  runWriterT,
+  execWriterT
+) where
+import MonadTrans -- lift
+import WriterClass
+import WriterT (WriterT(WriterT), runWriterT, execWriterT)
+
+-- после этого мы в пользовательском коде можем:
+-- либо работать напрямую с WriterT, подключив его себе `import WriterT (...)`
+-- либо работать с тайп-классоам Writer, подключив его себе `import Writer ...`
+
+-- example
+
+module Demo where
+import Writer
+import StateT
+import Control.Monad.Identity
+
+type SiWs = StateT Integer (WriterT String Identity)
+test :: SiWs ()
+test = do
+  x <- get
+  when (x > 100) (tell "Overflow") -- n.b. без лифта
+  put 42
+
+-- вот причина, по которой нам доступен tell без лифта:
+-- instance (Monoid w, Monad m) => MonadWriter w (W.WriterT w m) where ...
+
+runSiWs :: SiWs a -> Integer -> ((a, Integer), String)
+runSiWs m = runIdentity . runWriterT . (runStateT m)
+
+ghci> runSiWs test 133
+(((),42),"Overflow") -- в лог попала запись, телл работает
+
+```
+repl
+
+```hs
+https://stepik.org/lesson/38581/step/10?unit=20506
+TODO
+{--
+В этой и следующих задачах мы продолжаем работу с трансформером LoggT разработанным на [первом уроке этой недели](#4.1.12):
+
+data Logged a = Logged String a deriving (Eq,Show)
+newtype LoggT m a = LoggT { runLoggT :: m (Logged a) }
+write2log :: Monad m => String -> LoggT m ()
+type Logg = LoggT Identity
+runLogg :: Logg a -> Logged a
+
+Теперь мы хотим сделать этот трансформер mtl-совместимым.
+
+Избавьтесь от необходимости ручного подъема операций вложенной монады `State`, 
+сделав трансформер `LoggT`, 
+примененный к монаде с интерфейсом `MonadState`, 
+представителем этого (`MonadState`) класса типов:
+
+instance MonadState s m => MonadState s (LoggT m) where
+  get   = undefined
+  put   = undefined
+  state = undefined
+
+logSt' :: LoggT (State Integer) Integer      
+logSt' = do 
+  modify (+1)                   -- no lift!
+  a <- get                      -- no lift!
+  write2log $ show $ a * 10
+  put 42                        -- no lift!
+  return $ a * 100
+
+Проверка:
+
+GHCi> runState (runLoggT logSt') 2
+(Logged "30" 300,42)
+--}
+{-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE UndecidableInstances #-}
+import Data.Functor.Identity
+import Control.Monad.State
+
+instance MonadState s m => MonadState s (LoggT m) where
+  get   = undefined
+  put   = undefined
+  state = undefined
+
+-- solution
+-- догадался скопировать в решение инстансы функтора, аппликатива, монады и функции lift из прошлых заданий.
+-- и задача решилась очень просто.
+
+```
+test
+
+```hs
+https://stepik.org/lesson/38581/step/11?unit=20506
+TODO
+{--
+Избавьтесь от необходимости ручного подъема операций вложенной монады `Reader`, 
+сделав трансформер `LoggT`, примененный к монаде с интерфейсом `MonadReader`, 
+представителем этого (`MonadReader`) класса типов:
+
+instance MonadReader r m => MonadReader r (LoggT m) where
+  ask    = undefined
+  local  = undefined
+  reader = undefined
+
+Для упрощения реализации функции `local` имеет смысл использовать вспомогательную функцию, 
+поднимающую стрелку между двумя «внутренними представлениями» трансформера `LoggT` 
+в стрелку между двумя `LoggT`:
+
+mapLoggT :: (m (Logged a) -> n (Logged b)) -> LoggT m a -> LoggT n b
+mapLoggT f = undefined
+
+Тест:
+
+logRdr :: LoggT (Reader [(Int,String)]) ()      
+logRdr = do 
+  Just x <- asks $ lookup 2                      -- no lift!
+  write2log x
+  Just y <- local ((3,"Jim"):) $ asks $ lookup 3 -- no lift!
+  write2log y
+
+Ожидаемый результат:
+
+GHCi> runReader (runLoggT logRdr) [(1,"John"),(2,"Jane")]
+Logged "JaneJim" ()
+--}
+{-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE UndecidableInstances #-}
+import Data.Functor.Identity
+import Control.Monad.Reader
+
+mapLoggT :: (m (Logged a) -> n (Logged b)) -> LoggT m a -> LoggT n b
+mapLoggT f = undefined
+
+instance MonadReader r m => MonadReader r (LoggT m) where
+  ask    = undefined
+  local  = undefined
+  reader = undefined
+
+-- solution
+--  как mapLoggT использовать (ее, кстати, тесты не проверяют, оказалось  можно было и undefined оставить), 
+-- но у людей, кто сообразил (в решениях) очень лаконично получилось
+
+```
+test
+
+```hs
+https://stepik.org/lesson/38581/step/12?unit=20506
+TODO
+{--
+Чтобы избавится от необходимости ручного подъема операции `write2log`, 
+обеспечивающей стандартный интерфейс вложенного трансформера `LoggT`, 
+можно поступить по аналогии с другими трансформерами библиотеки mtl. 
+А именно, разработать класс типов `MonadLogg`, выставляющий этот стандартный интерфейс
+
+class Monad m => MonadLogg m where
+  w2log :: String -> m ()
+  logg :: Logged a -> m a
+
+(Замечание: Мы переименовываем функцию `write2log` в `w2log`, 
+поскольку хотим держать всю реализацию в одном файле исходного кода. 
+При следовании принятой в библиотеках transformers/mtl идеологии они имели бы одно и то же имя, 
+но были бы определены в разных модулях. При работе с transformers мы импортировали бы свободную функцию 
+c квалифицированным именем `Control.Monad.Trans.Logg.write2log`, 
+а при использовании mtl работали бы с методом класса типов `MonadLogg` с полным именем` Control.Monad.Logg.write2log`. )
+
+Этот интерфейс, во-первых, должен выставлять сам трансформер `LoggT`, обернутый вокруг произвольной монады:
+
+instance Monad m => MonadLogg (LoggT m) where
+  w2log = undefined
+  logg  = undefined
+
+Реализуйте этого представителя, для проверки используйте:
+
+logSt'' :: LoggT (State Integer) Integer      
+logSt'' = do 
+  x <- logg $ Logged "BEGIN " 1
+  modify (+x)
+  a <- get
+  w2log $ show $ a * 10
+  put 42
+  w2log " END"
+  return $ a * 100
+
+Результат должен быть таким:
+
+GHCi> runState (runLoggT logSt'') 2
+(Logged "BEGIN 30 END" 300,42)
+
+Во-вторых, интерфейс `MonadLogg` должен выставлять любой стандартный трансформер, 
+обернутый вокруг монады, выставляющей этот интерфейс:
+
+instance MonadLogg m => MonadLogg (StateT s m) where
+  w2log = undefined
+  logg  = undefined
+
+instance MonadLogg m => MonadLogg (ReaderT r m) where
+  w2log = undefined
+  logg  = undefined
+  
+-- etc...
+
+Реализуйте двух этих представителей, для проверки используйте:
+
+rdrStLog :: ReaderT Integer (StateT Integer Logg) Integer      
+rdrStLog = do 
+  x <- logg $ Logged "BEGIN " 1
+  y <- ask
+  modify (+ (x+y))
+  a <- get
+  w2log $ show $ a * 10
+  put 42
+  w2log " END"
+  return $ a * 100
+
+Результат должен быть таким:
+
+GHCi> runLogg $ runStateT (runReaderT rdrStLog 4) 2
+Logged "BEGIN 70 END" (700,42)
+--}
+{-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE UndecidableInstances #-}
+import Data.Functor.Identity
+import Control.Monad.State
+import Control.Monad.Reader
+
+class Monad m => MonadLogg m where
+  w2log :: String -> m ()
+  logg :: Logged a -> m a
+
+instance Monad m => MonadLogg (LoggT m) where
+  w2log = undefined
+  logg  = undefined
+
+instance MonadLogg m => MonadLogg (StateT s m) where
+  w2log = undefined
+  logg  = undefined
+
+instance MonadLogg m => MonadLogg (ReaderT r m) where
+  w2log = undefined
+  logg  = undefined
+
+-- solution
+
+```
+test
+
+## chapter 4.5, Задачи на трансформеры
+
+https://stepik.org/lesson/45331/step/1?unit=23645
+
+В этом уроке вы выполните несколько заданий с помощью знаний, которые получили на этой неделе.
+
+Теперь, когда мы уже хорошо понимаем принципы внутреннего устройства transformers и mtl, 
+предполагается, что во всех последующих задачах вы будете использовать не наши самодельные трансформеры, 
+а библиотечные. Не забывайте импортировать необходимые модули и подключать расширения языка.
+
+```hs
+https://stepik.org/lesson/45331/step/2?unit=23645
+TODO
+{--
+Функция `tryRead` обладает единственным эффектом: 
+в случае ошибки она должна прерывать вычисление. 
+Это значит, что её можно использовать в любой монаде, предоставляющей возможность завершать вычисление с ошибкой, 
+но сейчас это не так, поскольку её тип это делать не позволяет:
+
+data ReadError = EmptyInput | NoParse String
+  deriving Show
+
+tryRead :: (Read a, Monad m) => String -> ExceptT ReadError m a
+
+Измените её так, чтобы она работала в любой монаде, позволяющей сообщать об исключительных ситуациях типа `ReadError`. 
+Для этого к трансформеру `ExceptT` в библиотеке `mtl` прилагается класс типов `MonadError` 
+(обратите внимание на название класса — это так сделали специально, чтобы всех запутать), 
+находящийся в модуле `Control.Monad.Except`
+--}
+import Control.Monad.Except
+
+tryRead :: (Read a, MonadError ReadError m) => String -> m a
+tryRead = undefined
+
+-- solution
+
+```
+test
+
+```hs
+https://stepik.org/lesson/45331/step/3?unit=23645
+TODO
+{--
+В очередной раз, у вас есть дерево строковых представлений чисел:
+
+data Tree a = Leaf a | Fork (Tree a) a (Tree a)
+
+и функция `tryRead`:
+
+data ReadError = EmptyInput | NoParse String
+  deriving Show
+
+tryRead :: (Read a, MonadError ReadError m) => String -> m a
+
+Просуммируйте числа в дереве, а если хотя бы одно прочитать не удалось, верните ошибку:
+
+GHCi> treeSum $ Fork (Fork (Leaf "1") "2" (Leaf "oops")) "15" (Leaf "16")
+Left (NoParse "oops")
+GHCi> treeSum $ Fork (Fork (Leaf "1") "2" (Leaf "0")) "15" (Leaf "16")
+Right 34
+
+Подумайте, что общего у этой задачи с похожей, которую вы решали ранее (4.3.13)? 
+В чем отличия? 
+При чем здесь библиотека mtl?
+--}
+treeSum :: Tree String -> Either ReadError Integer
+treeSum = undefined
+
+-- solution
+
+```
+test
+
+```hs
+https://stepik.org/lesson/45331/step/4?unit=23645
+TODO
+{--
+Вам дан список вычислений с состоянием (`State s a`) и начальное состояние. 
+Требуется выполнить все эти вычисления по очереди (очередное вычисление получает на вход состояние, оставшееся от предыдущего) 
+и вернуть список результатов. 
+Но это ещё не всё. 
+Ещё вам дан предикат, определяющий, разрешено некоторое состояние или нет; 
+после выполнения очередного вычисления вы должны с помощью этого предиката проверить текущее состояние, 
+и, если оно не разрешено, завершить вычисление, указав номер вычисления, которое его испортило.
+
+При этом, завершаясь с ошибкой, мы можем как сохранить накопленное до текущего момента состояние, так и выкинуть его. 
+В первом случае наша функция будет иметь такой тип:
+
+runLimited1 :: (s -> Bool) -> [State s a] -> s -> (Either Int [a], s)
+
+Во втором — такой:
+
+runLimited2 :: (s -> Bool) -> [State s a] -> s -> Either Int ([a], s)
+
+Пример:
+— после выполнения вычисления с индексом 2 (нумерация с нуля) в состоянии оказалась тройка, что плохо:
+
+GHCi> runLimited1 (< 3) [modify (+1), modify (+1), modify (+1), modify (+1)] 0
+(Left 2,3)
+GHCi> runLimited2 (< 3) [modify (+1), modify (+1), modify (+1), modify (+1)] 0
+Left 2
+
+Другой пример:
+— всё хорошо, предикат всё время выполнялся. Вычисления ничего не возвращали (имели тип `State Int ()`), 
+так что списки получились такие неинтересные:
+
+GHCi> runLimited1 (< 100) [modify (+1), modify (+1), modify (+1), modify (+1)] 0
+(Right [(),(),(),()],4)
+GHCi> runLimited2 (< 100) [modify (+1), modify (+1), modify (+1), modify (+1)] 0
+Right ([(),(),(),()],4)
+
+Если, прочитав про список, с каждым элементом которого надо совершить какое-то действие, вы сразу же подумали про traverse, 
+то правильно сделали. Вопрос только в том, какое именно действие надо совершить с каждым элементом списка, 
+но тут тоже всё довольно просто: надо выполнить вычисление с состоянием, описываемое элементом списка, 
+а затем проверить состояние и, в случае проблемы, кинуть исключение:
+(Прежде чем проходить по списку, мы ещё пронумеровали его элементы.)
+
+limited p fs = traverse limit1 (zip [0..] fs)
+  where
+    limit1 (i, f) = do
+      a <- state (runState f)
+      stateIsBad <- gets (not . p)
+      when stateIsBad $ throwError i
+      pure a
+
+Собственно, остался сущий пустяк — запустить наше новое вычисление.
+
+runLimited1 :: (s -> Bool) -> [State s a] -> s -> (Either Int [a], s)
+runLimited1 p fs s = run1 (limited p fs) s
+
+runLimited2 :: (s -> Bool) -> [State s a] -> s -> Either Int ([a], s)
+runLimited2 p fs s = run2 (limited p fs) s
+
+А теперь задание. Реализуйте функции `run1` и `run2`
+--}
+import Control.Monad.Except
+import Control.Monad.State
+import Data.Foldable
+
+
+run1 = undefined
+run2 = undefined
+
+-- solution
+-- Ответ в этой книге "What I Wish I Knew When Learning Haskell "
+-- очень помогла сигнатура
+-- limited :: (MonadState a m, MonadError e m, Num e, Enum e) => (a -> Bool) -> [State a b] -> m [b]
+-- И еще я включал расширения TypeApplications и PartialTypeSignatures, потому что run1 и run2 неоднозначно задают монаду m
+
+```
+test
+
+```hs
+https://stepik.org/lesson/45331/step/5?unit=23645
+TODO
+{--
+Почти у каждого трансформера монад есть соответствующий ему класс типов 
+(`StateT` — `MonadState`, `ReaderT` — `MonadReader`), 
+хотя иногда имя класса построено иначе, нежели имя трансформера (`ExceptT` — `MonadError`).
+
+Как называется класс, соответствующий трансформеру `MaybeT`? (Вопрос с небольшим подвохом.)
+--}
+
+-- solution
+-- в качестве ответа требуется имя класса типов
+-- семантика совершенно противоположенна "оборвать вычисления без дополнительной информации"
+
+MonadPlus
+
+> There is no class required for `MaybeT`, however. It is described entirely by `MonadPlus`﻿
+
+```
+test
+
+```hs
+https://stepik.org/lesson/45331/step/6?unit=23645
+TODO
+{--
+Чтобы закончить наш курс ярко, предлагаем вам с помощью этой задачи в полной мере почувствовать на себе всю мощь continuation-passing style. 
+Чтобы успешно решить эту задачу, вам нужно хорошо понимать, как работает CPS и монада ContT 
+(а этого, как известно, никто не понимает). Кстати, это была подсказка.
+
+Сопрограмма (корутина, coroutine) это обобщение понятия подпрограммы (по-простому говоря, функции). 
+У функции, в отличие от сопрограммы, есть одна точка входа (то, откуда она начинает работать), 
+а точек выхода может быть несколько, но выйти через них функция может только один раз за время работы; 
+у сопрограммы же точек входа и выхода может быть несколько. Проще всего объяснить на примере:
+
+coroutine1 = do
+  tell "1"
+  yield
+  tell "2"
+
+coroutine2 = do
+  tell "a"
+  yield
+  tell "b"
+
+GHCi> execWriter (runCoroutines coroutine1 coroutine2)
+"1a2b"
+
+Здесь используется специальное действие `yield`, 
+которое передает управление другой сопрограмме. 
+Когда другая сопрограмма возвращает управление (с помощью того же `yield` или завершившись), 
+первая сопрограмма продолжает работу с того места, на котором остановилась в прошлый раз.
+
+В общем случае, одновременно могут исполняться несколько сопрограмм, 
+причем при передаче управления, они могут обмениваться значениями. 
+В этой задаче достаточно реализовать сопрограммы в упрощенном виде: 
+одновременно работают ровно две сопрограммы и значениями обмениваться они не могут.
+
+Реализуйте трансформер `CoroutineT`, функцию `yield` для передачи управления и функцию `runCoroutines` для запуска. 
+Учтите, что одна сопрограмма может завершиться раньше другой; другая должна при этом продолжить работу:
+
+coroutine3, coroutine4 :: CoroutineT (Writer String) ()
+coroutine3 = do
+  tell "1"
+  yield
+  yield
+  tell "2"
+
+coroutine4 = do
+  tell "a"
+  yield
+  tell "b"
+  yield
+  tell "c"
+  yield
+  tell "d"
+  yield
+
+GHCi> execWriter (runCoroutines coroutine3 coroutine4)
+"1ab2cd"
+--}
+{-# LANGUAGE FlexibleInstances, MultiParamTypeClasses #-}
+
+-- Пожалуйста, не удаляйте эти импорты. Они нужны для тестирующей системы.
+import Control.Monad.State
+import Control.Monad.Writer
+import Data.Foldable
+
+newtype CoroutineT m a = CoroutineT { runCoroutineT :: ?? }
+
+runCoroutines :: Monad m => CoroutineT m () -> CoroutineT m () -> m ()
+runCoroutines = undefined
+
+yield :: Monad m => CoroutineT m ()
+yield = undefined
+
+-- solution
+https://hoogle.haskell.org/?hoogle=Coroutine&scope=set%3Astackage
+
+- Coroutine Pipelines by Mario Blaˇzevi´c https://themonadreader.files.wordpress.com/2011/10/issue19.pdf
+- Part 1: Pause and resume https://www.schoolofhaskell.com/school/to-infinity-and-beyond/pick-of-the-week/coroutines-for-streaming/part-1-pause-and-resume
+
+- https://hackage.haskell.org/package/monad-coroutine
+лишний параметр-обертку можно просто убрать, чуть подправив реализации функтора и монады. 
+Yield тоже сокращаем, убирая все навороты. 
+И для runCoroutines ничего лишнего не нужно, я лишь выделил в отдельную функцию 
+вариант довыполнения оставшейся корутины (тут смотрим на bounce и pogoStick).
+И да, в реализации MonadWriter listen и pass не нужны, можно не мучаться
+
+
+-- Вот код, который может помочь разобраться с ContT
+ccc :: ContT () IO ()
+ccc = do
+  liftIO $ putStrLn "C"
+  ContT $ \cont -> runContT ggg (cont)
+  liftIO $ putStrLn "C"
+  liftIO $ putStrLn "C"
+  liftIO $ putStrLn "C"
+
+ggg :: ContT () IO ()
+ggg = do
+  liftIO $ putStrLn "G"
+  liftIO $ putStrLn "G"
+  ContT $ \cont -> runContT fff (cont)
+  liftIO $ putStrLn "G"
+  liftIO $ putStrLn "G"
+  
+fff :: ContT () IO ()
+fff = do
+  liftIO $ putStrLn "F"
+  liftIO $ putStrLn "F"
+  liftIO $ putStrLn "F"
+  liftIO $ putStrLn "F"
+-- в середине вычисления ccc заменяем его продолжение на вычисление ggg, 
+-- а чтобы продолжение ccc не пропало, отправляем его в конец вычисления ggg, аналогичное повторяем с fff
+-- Такие действия являются аналогами yield, но им кое-чего не хватает (yield)
+
+```
+test
+
 
 
 
