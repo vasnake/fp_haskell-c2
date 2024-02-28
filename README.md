@@ -23,6 +23,9 @@ grep `TODO` markers, fix it.
 Два вычисления, образующих "пайплайн", в аппликативе не могут "взаимодействовать", а в монаде могут.
 https://stackoverflow.com/questions/23342184/difference-between-monad-and-applicative-in-haskell
 
+Стандартные тайп-классы и их законы:
+The standard Haskell libraries feature a number of type classes with algebraic or category-theoretic underpinnings https://wiki.haskell.org/Typeclassopedia
+
 ## links
 
 - The standard Haskell libraries feature a number of type classes with algebraic or category-theoretic underpinnings https://wiki.haskell.org/Typeclassopedia

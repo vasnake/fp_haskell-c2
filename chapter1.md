@@ -4,15 +4,46 @@
 
 [code sandbox](./chapter-1/test-applicative.hs)
 
-Мотивация: на примере парсера текста, композиция вычислений с эффектами,
-построение цепочек вычислений, создание комбинаторов (функций из функций).
-Универсальные интерфейсы для тайп-классов.
+Мотивация: на примере парсера текста, изучить: композиция вычислений с эффектами,
+построение цепочек вычислений, создание (парсер-)комбинаторов (функций из функций).
+Универсальные интерфейсы в виде тайп-классов.
 
 definitions:
-- Functor (fmap)
-- Applicative (pure, `<*>`)
-- Alternative (empty, `<|>`)
-- Compose f g a, Applicative для Compose
+- `Functor` (`fmap` aka `<$>`) `fmap :: (a -> b) -> f a -> f b`:
+протащить функцию через барьер контекста (поднять функцию в контекст).
+
+- `Applicative` (`pure`, "applied over" `<*>`) `pure :: a -> f a`; `(<*>) :: f (a -> b) -> f a -> f b`:
+вычисления в контексте, организация цепочек (пайплайнов) вычислений с эффектами.
+
+- `Applicative Alternative` (`empty`, "or, alternative" `<|>`) `empty :: f a`; `(<|>) :: f a -> f a -> f a`:
+The basic intuition is that empty represents some sort of "failure", and (<|>) represents a choice between alternatives
+
+- `Compose f g a`, Functor, Applicative для Compose, композиция аппликативов дает аппликатив,
+пример: матрица как список списков, для возведения в квадрат всех элементов надо функцию протащить через два барьера.
+
+Законы функтора: структура "контейнера" не меняется в функторе, только значение
+- `fmap id = id`
+- `fmap (g . h) = (fmap g) . (fmap h)` -- в Хаскел это выполняется автоматически, если выполняется первый закон (free theorem)
+
+Законы аппликативного функтора: 4 закона, "In some sense, they are all concerned with making sure that pure deserves its name"
+- `pure id <*> v = v` Identity law
+- `pure f <*> pure x = pure (f x)` Homomorphism
+- `u <*> pure y = pure (\f -> f y) <*> u` Interchange
+- `u <*> (v <*> w) = pure (.) <*> u <*> v <*> w` Composition
+- `fmap g x = pure g <*> x` how Applicative should relate to Functor
+
+Законы альтернатива:
+instances of Alternative should satisfy the monoid laws
+- `empty <|> x = x`
+- `x <|> empty = x`
+- `(x <|> y) <|> z = x <|> (y <|> z)`
+
+Since Alternative is a subclass of Applicative:
+- `empty <*> f = empty` left zero law
+- `f <*> empty = empty` right zero (not IO)
+- `(a <|> b) <*> c = (a <*> c) <|> (b <*> c)` Left Distribution
+- `a <*> (b <|> c) = (a <*> b) <|> (a <*> c)` Right Distribution
+- `(pure a) <|> x = pure a` Left Catch
 
 ## chapter 1.1, Определение аппликативного функтора
 
@@ -106,6 +137,8 @@ instance Functor ((->) e) where
 ```
 repl
 
+### 1.1.4 test
+
 ```hs
 {--
 В модуле `Data.Functor` определен оператор `<$>`, являющийся инфиксным аналогом функции `fmap`
@@ -137,12 +170,20 @@ succ <$> succ <$> "abc"
 `(Char -> Char) -> (Char -> Char) -> Char -> Char`
 понятен, ибо композиция двух функций именно так и выглядит в данном случае,
 берем две функции `Char -> Char` и получаем третью ф. `Char -> Char`, скобки справа можно убрать (каррирование).
+
+А можно рассуждать так:
+оператор fmap `<$>` берет первый параметр - функцию одного аргумента,
+второй параметр - функтор, возвращает функтор.
+Соответственно, имея ограничение на полиморфизм в виде `Char`, первый параметр будет
+`Char -> Char`, второй параметр это функтор стрелки `a -> a`, т.е. `Char -> Char`.
+Получаем композицию двух стрелок, что на выходе дает `Char -> Char`.
+
 ```
 test
 
+### 1.1.5 test
+
 ```hs
-https://stepik.org/lesson/28880/step/5?unit=9912
-TODO
 {--
 Сделайте типы данных `Arr2 e1 e2` и `Arr3 e1 e2 e3` представителями класса типов `Functor`
 
@@ -166,6 +207,40 @@ instance Functor (Arr3 e1 e2 e3) where
   fmap = undefined
 
 -- solution
+
+newtype Arr2 e1 e2 a = Arr2 {getArr2 :: e1 -> e2 -> a}
+newtype Arr3 e1 e2 e3 a = Arr3 {getArr3 :: e1 -> e2 -> e3 -> a}
+
+instance Functor (Arr2 e1 e2) where
+  fmap :: (a -> b) -> Arr2 e1 e2 a -> Arr2 e1 e2 b -- (a -> b) -> f a -> f b
+  fmap ab e1e2a = Arr2 e1e2b where
+    e1e2b e1 e2 = ab (getArr2 e1e2a e1 e2)
+
+instance Functor (Arr3 e1 e2 e3) where
+  fmap :: (a -> b) -> Arr3 e1 e2 e3 a -> Arr3 e1 e2 e3 b -- (a -> b) -> f a -> f b
+  fmap ab e1e2e3a = Arr3 e1e2e3b where
+    e1e2e3b e1 e2 e3 = ab (getArr3 e1e2e3a e1 e2 e3)
+
+-- alternatives
+
+instance Functor (Arr2 e1 e2) where
+  fmap f (Arr2 g) = Arr2 $ (f .) . g
+
+instance Functor (Arr3 e1 e2 e3) where
+  fmap f (Arr3 g) = Arr3 $ ((f .) .) . g
+
+instance Functor (Arr2 e1 e2) where
+    fmap f (Arr2 f2) = Arr2 $ \e1 e2 -> f $ f2 e1 e2
+
+instance Functor (Arr3 e1 e2 e3) where
+    fmap f (Arr3 f3) = Arr3 $ \e1 e2 e3 -> f $ f3 e1 e2 e3
+
+
+instance Functor (Arr2 e1 e2) where
+    fmap f (Arr2 f1) = Arr2 (\x -> f . (f1 x))
+	
+instance Functor (Arr3 e1 e2 e3) where
+    fmap f (Arr3 f1) = Arr3 (\x y -> f . (f1 x y))
 
 ```
 test
@@ -220,6 +295,8 @@ Right (f (g b)) = Right (f (g b))
 ```
 repl
 
+### 1.1.7 test
+
 ```hs
 {--
 Самостоятельно докажите выполнение первого `(fmap id = id)`
@@ -238,10 +315,10 @@ Select all correct options from the list
 
 -- solution
 
-- id является правым нейтральным элементом для композиции.
 - (да) id является левым нейтральным элементом для композиции.
-- Композиция не коммутативна.
 - (да) Композиция ассоциативна.
+- id является правым нейтральным элементом для композиции.
+- Композиция не коммутативна.
 
 1) fmap id === id
 
@@ -300,6 +377,8 @@ x : (fmap id xs) -- IH
 x : xs = x: xs
 ```
 repl
+
+### 1.1.9 test
 
 ```hs
 {--
@@ -597,13 +676,13 @@ Just 16
 ```
 repl
 
+### 1.1.15 test
+
 ```hs
-https://stepik.org/lesson/28880/step/15?unit=9912
-TODO
 {--
 Следующий тип данных задает гомогенную тройку элементов, которую можно рассматривать как трехмерный вектор
 
-data Triple a = Tr a a a  deriving (Eq,Show)
+data Triple a = Tr a a a  deriving (Eq, Show)
 
 Сделайте этот тип функтором и аппликативным функтором с естественной для векторов семантикой покоординатного применения
 
@@ -612,11 +691,22 @@ Tr 1 4 9
 GHCi> Tr (^2) (+2) (*3) <*> Tr 2 3 4
 Tr 4 5 12
 --}
-data Triple a = Tr a a a deriving (Eq,Show)
+data Triple a = Tr a a a deriving (Eq, Show)
 
 -- solution
-
 -- надо определить 2 инстанса - аппликатив и функтор
+
+data Triple a = Tr a a a deriving (Eq, Show)
+
+instance Functor Triple where
+    fmap :: (a -> b) -> Triple a -> Triple b
+    fmap f (Tr x y z) = Tr (f x) (f y) (f z)
+
+instance Applicative Triple where
+    pure :: a -> Triple a
+    pure x = Tr x x x
+    (<*>) :: Triple (a -> b) -> Triple a -> Triple b
+    (Tr fx fy fz) <*> (Tr x y z) = Tr (fx x) (fy y) (fz z)
 
 ```
 test
@@ -656,11 +746,12 @@ instance Applicative [] where
 ```
 repl
 
+### 1.2.3 test
+
 ```hs
-https://stepik.org/lesson/30424/step/3?unit=11041
-TODO
 {--
-Предположим, что для стандартного функтора списка оператор `(<*>)` определен стандартным образом,
+Предположим, что для стандартного функтора списка, 
+оператор `(<*>)` определен стандартным образом,
 а метод `pure` изменен
 
 pure x = [x,x]
@@ -677,10 +768,55 @@ Select all correct options from the list
 --}
 
 -- solution
+-- Всё, что использует pure
++ Applicative-Functor: `g <$> xs ≡ pure g <*> xs`
+- Composition: `(.) <$> us <*> vs <*> xs ≡ us <*> (vs <*> xs)`
++ Homomorphism: `pure g <*> pure x ≡ pure (g x)`
++ Identity: `pure id <*> xs ≡ xs`
++ Interchange: `fs <*> pure x ≡ pure ($ x) <*> fs`
 
 https://pastebin.com/bUAyStqG
+module First where
+import Prelude hiding (Applicative, pure, (<*>))
+infixl 4 <*>
+class Functor f => Applicative f where
+    pure :: a -> f a
+    (<*>) :: f (a -> b) -> f a -> f b  
+instance Applicative [] where
+    pure x = [x,x]
+    fs <*> xs = [f x | f <- fs, x <- xs]
+
+x = 3
+g = (*2)
+us = [(+7)]
+vs = [(+9)]
+fs = [\x -> 3*x, \x -> 4*x]
+xs = [3,4]
+
+comp1 = (.) <$> us <*> vs <*> xs
+comp2 = us <*> (vs <*> xs)
+
+iden1 = pure id <*> xs
+iden2 = xs
+
+appfun1 = g <$> xs
+appfun2 = pure g <*> xs
+
+homo1 = pure g <*> pure x :: [Integer]
+homo2 = pure (g x) :: [Integer]
+
+inter1 = fs <*> pure x
+inter2 = pure ($ x) <*> fs
+ 
+main = do
+    putStrLn ("Composition:\t" ++ show comp1 ++ " ≡  " ++ show comp2)
+    putStrLn ("Identity:\t" ++ show iden1 ++ " ≡  " ++ show iden2)
+    putStrLn ("Appl-Functor:\t" ++ show appfun1 ++ " ≡  " ++ show appfun2)
+    putStrLn ("Homomorphism:\t" ++ show homo1 ++ " ≡  " ++ show homo2)
+    putStrLn ("Interchange:\t" ++ show inter1 ++ " ≡  " ++ show inter2)
+
 ```
-test
+[test](./chapter-1/test-1.2.3.hs)
 
 ### 1.2.4 аппликативный функтор ZipList
 
@@ -732,9 +868,9 @@ repeat :: a -> [a]      -- Defined in ‘GHC.List’
 ```
 repl
 
+### 1.2.5 test
+
 ```hs
-https://stepik.org/lesson/30424/step/5?unit=11041
-TODO
 {--
 В модуле `Data.List` имеется семейство функций `zipWith`, `zipWith3`, `zipWith4`, ..
 
@@ -770,6 +906,18 @@ GHCi> (\a b c d -> 2*a+3*b+5*c-4*d) >$< x1s >*< x2s >*< x3s >*< x4s
 import Control.Applicative (ZipList(ZipList), getZipList)
 
 -- solution
+
+import Control.Applicative (ZipList(ZipList), getZipList)
+-- (>$<) :: (a -> b) -> [a] -> [b]
+-- (>$<) = (<$>) -- нельзя, ZipList != []
+(>$<) f xs = getZipList (f <$> (ZipList xs))
+-- (>*<) :: [a -> b] -> [a] -> [b]
+-- (>*<) = (<*>) -- нельзя, ZipList != []
+(>*<) xs ys = getZipList ((ZipList xs) <*> (ZipList ys))
+
+-- alternative
+fs >$< xs = getZipList $ fs <$> ZipList xs
+xs >*< ys = getZipList $ ZipList xs <*> ZipList ys
 
 ```
 test
@@ -814,9 +962,9 @@ ghci> ("Answer to ", (*)) <*> ("the Ultimate ", 6) <*> ("Question", 7)
 ```
 repl
 
+### 1.2.8 test
+
 ```hs
-https://stepik.org/lesson/30424/step/8?unit=11041
-TODO
 {--
 Функция
 
@@ -825,7 +973,7 @@ divideList []     = 1
 divideList (x:xs) = (/) x (divideList xs)
 
 сворачивает список посредством деления. Модифицируйте ее, реализовав
-divideList' :: (Show a, Fractional a) => [a] -> (String,a)
+divideList' :: (Show a, Fractional a) => [a] -> (String, a)
 такую что последовательность вычислений отражается в логе
 
 GHCi> divideList [3,4,5]
@@ -844,6 +992,22 @@ divideList' []     = _
 divideList' (x:xs) = (/) <$> _ <*> _
 
 -- solution
+
+divideList' :: (Show a, Fractional a) => [a] -> (String, a)
+divideList' []     = ("1.0", 1)
+divideList' (x:xs) = divOp <$> firstPair <*> secondPair where -- (/) <$> ("<-" ++ (show x) ++ "/", x) <*> (divideList' xs)
+    divOp = (/)
+    firstPair = (log x, x)
+    secondPair = (divideList' xs)
+    log a = "<-" ++ (show a) ++ "/"
+
+-- alternative
+
+divideList' :: (Show a, Fractional a) => [a] -> (String, a)
+divideList' = foldr divLog oneLogged where
+	oneLogged = let r = 1 in (show r, r)
+	divLog x = ((/) <$> (log x, x) <*>)
+	log x = "<-" ++ show x ++ "/"
 
 ```
 test
@@ -875,6 +1039,8 @@ ghci> (+) <*> (*3) $ 2 -- читать такое вычисление надо 
 -- (+) 2 ... -- это `g e (...)`, второе вычисление
 ```
 repl
+
+### 1.2.10 test
 
 ```hs
 https://stepik.org/lesson/30424/step/10?unit=11041
