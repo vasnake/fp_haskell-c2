@@ -1,33 +1,49 @@
-{-# LANGUAGE TypeOperators #-} -- для разрешения `|.|` в качестве имени оператора над типами
-{-# LANGUAGE PolyKinds #-}
+{-# LANGUAGE InstanceSigs #-} -- позволяет писать сигнатуры для инстансов
+-- {-# LANGUAGE TypeOperators #-} -- для разрешения `|.|` в качестве имени оператора над типами
+-- {-# LANGUAGE PolyKinds #-}
+-- {-# LANGUAGE FunctionalDependencies #-}
+-- {-# LANGUAGE MultiParamTypeClasses #-}
 
+{-# OPTIONS_GHC -Wno-noncanonical-monad-instances #-}
+{-# OPTIONS_GHC -Wno-noncanonical-monoid-instances #-}
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
+
 {-# HLINT ignore "Use <$>" #-}
 {-# HLINT ignore "Redundant bracket" #-}
 {-# HLINT ignore "Functor law" #-}
 {-# HLINT ignore "Use foldr" #-}
 {-# HLINT ignore "Using <$> on tuple" #-}
+{-# HLINT ignore "Redundant lambda" #-}
+{-# HLINT ignore "Use const" #-}
+{-# HLINT ignore "Eta reduce" #-}
+{-# HLINT ignore "Avoid lambda" #-}
 
 module TestApplicative where
 
 import Prelude (
     show, read, String, Char, Functor, fmap, Bool, otherwise, Int,
     (==), (*), (^), (-), (/), (++), id, const, Maybe (..), null, ($), succ, (.), undefined, Num ((+)),
-    length, take, tail, zipWith, Fractional
+    length, take, tail, zipWith, Fractional,
+    zip, lookup, flip, Either(..), map, Foldable
     )
 
-import Text.Parsec (getParserState)
+import Text.Parsec ( Parsec(..), getParserState, parseTest, many, many1 )
+import Text.Parsec.Char ( alphaNum, string, string' )
 
 import Data.Char ( Char, digitToInt, isDigit, isLower )
 
+import Data.Monoid ( Sum(..) )
+
 import Control.Applicative (
-    Applicative((<*>), pure, (<*)), (<$>),
+    Applicative((<*>), pure, (<*)), (<$>), (<**>),
     Alternative((<|>), empty),
-    ZipList(ZipList), getZipList
+    ZipList(ZipList), getZipList,
+    liftA, liftA2
     )
 
 import GHC.Show ( Show(..) )
 import GHC.Base ( Eq(..) )
+import Distribution.Compat.Lens (_1)
 
 newtype Parser a = Parser { apply :: String -> [(a, String)] }
 
@@ -300,6 +316,7 @@ GHCi> getArr3 (Arr3 (\x y z w -> x+y+z-w) <*> Arr3 (\x y z -> x*y*z)) 2 3 4
 -15
 --}
 {--
+-- implemented erlier
 newtype Arr2 e1 e2 a = Arr2 { getArr2 :: e1 -> e2 -> a }
 newtype Arr3 e1 e2 e3 a = Arr3 { getArr3 :: e1 -> e2 -> e3 -> a }
 
@@ -315,15 +332,19 @@ instance Functor (Arr3 e1 e2 e3) where
 --}
 instance Applicative (Arr2 e1 e2) where
   pure :: a -> Arr2 e1 e2 a -- a -> f a
-  pure = undefined
+  pure a = Arr2 (\ e1 e2 -> a)
+
   (<*>) :: Arr2 e1 e2 (a -> b) -> Arr2 e1 e2 a -> Arr2 e1 e2 b -- f (a -> b) -> f a -> f b
-  (<*>) = undefined
+  (Arr2 g) <*> (Arr2 h) = Arr2 (\ e1 e2 -> g e1 e2 (h e1 e2))
 
 instance Applicative (Arr3 e1 e2 e3) where
   pure :: a -> Arr3 e1 e2 e3 a -- a -> f a
-  pure = undefined
+  pure a = Arr3 (\ e1 e2 e3 -> a)
+
   (<*>) :: Arr3 e1 e2 e3 (a -> b) -> Arr3 e1 e2 e3 a -> Arr3 e1 e2 e3 b -- f (a -> b) -> f a -> f b
-  (<*>) = undefined
+  (Arr3 g) <*> (Arr3 h) = Arr3 getB where
+    getB = \ e1 e2 e3 -> let a = (h e1 e2 e3) in g e1 e2 e3 a
+
 {--
 -- аппликатив для стрелки e -> a
 -- e: environment
@@ -337,8 +358,72 @@ instance Applicative ((->) e) where
     (<*>) eab ea e = eab e (ea e) -- так понятнее?
     (<*>) g h = \e -> g e (h e) -- через лямбду
 -- e протаскивается во все вычисления
--- эффект: чтение из енв.
+-- эффект: чтение из енв. Енв идет первый параметром
 --}
 
 test17 = getArr2 (Arr2 (\x y z -> x+y-z) <*> Arr2 (*)) 2 3 -- -1
 test18 = getArr3 (Arr3 (\x y z w -> x+y+z-w) <*> Arr3 (\x y z -> x*y*z)) 2 3 4 -- -15
+
+
+test19 = pure zip <*> (Sum 5, [1,2,3]) <*> (Sum 4, [5,6])
+
+{--
+Задачка на понимание, как альтернативная реализация оператора `<**>` влияет на
+результат `apply over` для аппликативов: Maibe, List, ZipList, Either, Pair, Env
+Следовательно, надо посмотреть на детали реализации оператора для каждого из этих аппликативов и
+понять, как влияет на результат изменение реализации
+--}
+infixl 4 <*?>
+(<*?>) :: Applicative f => f a -> f (a -> b) -> f b
+(<*?>) = flip (<*>)
+
+-- эксперименты по поиску (контр)примеров, если значения в паре результата разные: найден пример влияния
+
+test_1_2_14 :: (Applicative f) => f a -> f (a -> b) -> (f b, f b)
+test_1_2_14 xs fs = (xs <**> fs, xs <*?> fs) -- [1,2] [(+3),(+4)]
+
+testMaibe = test_1_2_14 (Just 3) (Just (+2))
+-- ghci> test_1_2_14 (Just 3) (Just (+2))
+-- (Just 5,Just 5)
+-- ghci> test_1_2_14 Nothing (Just (+2))
+-- (Nothing,Nothing)
+-- ghci> test_1_2_14 (Just 3) Nothing
+-- (Nothing,Nothing)
+
+testList = test_1_2_14 [3, 7] [(^2), (+1)] -- один есть
+-- ghci> test_1_2_14 [3, 7] [(^2), (+1)]
+-- ([9,4,49,8],[9,49,4,8])
+
+testZipList = test_1_2_14 (ZipList [3, 7]) (ZipList [(^2),(+1)])
+-- ghci> test_1_2_14 [3, 7] [(^2), (+1)]
+-- ([9,4,49,8],[9,49,4,8])
+-- ghci> test_1_2_14 (ZipList [3, 7]) (ZipList [(^2),(+1)])
+-- (ZipList {getZipList = [9,8]},ZipList {getZipList = [9,8]})
+-- ghci> test_1_2_14 (ZipList [3, 7, 11]) (ZipList [(^2),(+1)])
+-- (ZipList {getZipList = [9,8]},ZipList {getZipList = [9,8]})
+-- ghci> test_1_2_14 (ZipList [3, 7]) (ZipList [(^2),(+1), (*10)])
+-- (ZipList {getZipList = [9,8]},ZipList {getZipList = [9,8]})
+
+testEither = test_1_2_14 (Right 3) (Right (^2)) -- третий есть
+-- ghci> test_1_2_14 (Left 0) (Left (2))
+-- (Left 0,Left 2)
+-- ghci> test_1_2_14 (Right 3) (Right (^2))
+-- (Right 9,Right 9)
+-- ghci> test_1_2_14 (Left 3) (Right (^2))
+-- (Left 3,Left 3)
+-- ghci> test_1_2_14 (Right 3) (Left ("oops"))
+-- (Left "oops",Left "oops")
+-- ghci> test_1_2_14 (Left "foo") (Right (^2))
+-- (Left "foo",Left "foo")
+
+testPair = test_1_2_14 ("foo", 7) ("bar", (+1)) -- второй есть
+-- ghci> test_1_2_14 ("foo", 7) ("bar", (+1))
+-- (("foobar",8),("barfoo",8))
+
+-- testEnv :: ((String -> Int), (String -> Int))
+-- testEnv :: String -> (Int, Int)
+testEnv :: (String -> Int, String -> Int)
+-- testEnv = test_1_2_14 length (\x -> (+(length x)))
+testEnv = test_1_2_14 (\s -> length s) (\s x -> x + (length s))
+runTestEnv' (f1, f2) s = (f1 s, f2 s)
+runTestEnv = runTestEnv' testEnv

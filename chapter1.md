@@ -11,6 +11,7 @@
 definitions:
 - `Functor` (`fmap` aka `<$>`) `fmap :: (a -> b) -> f a -> f b`:
 протащить функцию через барьер контекста (поднять функцию в контекст).
+`liftA = fmap` при условии, что это аппликативный функтор.
 
 - `Applicative` (`pure`, "applied over" `<*>`) `pure :: a -> f a`; `(<*>) :: f (a -> b) -> f a -> f b`:
 вычисления в контексте, организация цепочек (пайплайнов) вычислений с эффектами.
@@ -1043,8 +1044,6 @@ repl
 ### 1.2.10 test
 
 ```hs
-https://stepik.org/lesson/30424/step/10?unit=11041
-TODO
 {--
 Сделайте типы данных `Arr2 e1 e2` и `Arr3 e1 e2 e3` представителями класса типов `Applicative`
 
@@ -1077,12 +1076,71 @@ instance Applicative (Arr3 e1 e2 e3) where
 
 -- solution
 
+newtype Arr2 e1 e2 a = Arr2 { getArr2 :: e1 -> e2 -> a }
+newtype Arr3 e1 e2 e3 a = Arr3 { getArr3 :: e1 -> e2 -> e3 -> a }
+
+-- функторы уже делали ранее, копипаста
+instance Functor (Arr2 e1 e2) where
+  -- fmap :: (a -> b) -> Arr2 e1 e2 a -> Arr2 e1 e2 b -- (a -> b) -> f a -> f b
+  fmap f arr2 = Arr2 arr2' where
+    arr2' e1 e2 = f (getArr2 arr2 e1 e2)
+
+instance Functor (Arr3 e1 e2 e3) where
+  -- fmap :: (a -> b) -> Arr3 e1 e2 e3 a -> Arr3 e1 e2 e3 b -- (a -> b) -> f a -> f b
+  fmap f arr3 = Arr3 arr3' where
+    arr3' e1 e2 e3 = f (getArr3 arr3 e1 e2 e3)
+
+-- аппликативы, содержание задачки
+instance Applicative (Arr2 e1 e2) where
+  -- pure :: a -> Arr2 e1 e2 a -- a -> f a
+  pure a = Arr2 (\ e1 e2 -> a)
+
+  -- (<*>) :: Arr2 e1 e2 (a -> b) -> Arr2 e1 e2 a -> Arr2 e1 e2 b -- f (a -> b) -> f a -> f b
+  (Arr2 g) <*> (Arr2 h) = Arr2 (\ e1 e2 -> g e1 e2 (h e1 e2))
+
+instance Applicative (Arr3 e1 e2 e3) where
+  -- pure :: a -> Arr3 e1 e2 e3 a -- a -> f a
+  pure a = Arr3 (\ e1 e2 e3 -> a)
+
+  -- (<*>) :: Arr3 e1 e2 e3 (a -> b) -> Arr3 e1 e2 e3 a -> Arr3 e1 e2 e3 b -- f (a -> b) -> f a -> f b
+  (Arr3 g) <*> (Arr3 h) = Arr3 getB where -- может, так читабельнее?
+    getB = \ e1 e2 e3 -> let a = (h e1 e2 e3) in g e1 e2 e3 a
+
+-- alternatives: стрелки как аппликативные функторы - это очень занятно
+
+import Control.Applicative (liftA,liftA2)
+newtype Arr2 e1 e2 a = Arr2 {getArr2 :: e1 -> e2 -> a}
+newtype Arr3 e1 e2 e3 a = Arr3 {getArr3 :: e1 -> e2 -> e3 -> a}
+
+instance Functor (Arr2 e1 e2) where
+  fmap = liftA
+
+instance Functor (Arr3 e1 e2 e3) where
+  fmap = liftA
+
+instance Applicative (Arr2 e1 e2) where
+  pure x = Arr2 (\e1 e2 -> x)
+  (<*>) (Arr2 g) (Arr2 h) = Arr2 $ liftA2 (<*>) g h
+
+instance Applicative (Arr3 e1 e2 e3) where
+  pure x = Arr3 (\e1 e2 e3 -> x)
+  (<*>) (Arr3 g) (Arr3 h) = Arr3 $ (liftA2 . liftA2) (<*>) g h
+
+-- ну так-то понятно, что стрелка это аппликатив, что каррирование позволяет иметь арность 1,
+-- что композиция аппликативов это тоже аппликатив,
+-- но как от этого перейти к `liftA2 :: (a -> b -> c) -> f a -> f b -> f c` ???
+-- непрятно ощущать себя дебилом
+ghci> :i liftA2
+class Functor f => Applicative f where
+  liftA2 :: (a -> b -> c) -> f a -> f b -> f c -- Defined in ‘GHC.Base’
+
+ghci> :i liftA
+liftA :: Applicative f => (a -> b) -> f a -> f b -- Defined in ‘GHC.Base’
 ```
 test
 
+### 1.2.11 test
 ```hs
-https://stepik.org/lesson/30424/step/11?unit=11041
-TODO
 {--
 Сопоставьте вычислению, поднятому в аппликативный функтор, 
 конкретного представителя класса типов `Applicative`, в котором это вычисление происходит.
@@ -1094,25 +1152,30 @@ Match two lists
 - \xs -> pure (++) <*> lookup 3 xs <*> lookup 5 xs
 - (,) <$> "dog" <*> "cat"
 
-- ?
-- ?
-- ?
-- ?
---}
+- (,) a
+- (->) a
+- Maibe
+- []
 
 -- solution
 
 pure zip <*> (Sum 5, [1,2,3]) <*> (Sum 4, [5,6])
--- здесь: 
+-- здесь: pair? вычисление `zip` поднимается в пару из моноида-суммы и списка, ответ `(,) a`
+ghci> :t pure zip <*> (Sum 5, [1,2,3]) <*> (Sum 4, [5,6])
+  :: (Num a1, Num a2, Num b) => (Sum a1, [(a2, b)])
 
 zip <*> tail
--- здесь: 
+-- здесь: `(->) a`, вычисление `zip` поднимается в стрелку
+ghci> :t tail
+tail :: HasCallStack => [a] -> [a]
 
 \xs -> pure (++) <*> lookup 3 xs <*> lookup 5 xs
--- здесь: 
+-- здесь: `Maybe`, вычисление `\xs -> pure (++) <*> lookup 3 xs` поднимается в результат лукапа, это мейби
+ghci> :t lookup
+lookup :: Eq a => a -> [(a, b)] -> Maybe b
 
 (,) <$> "dog" <*> "cat"
--- здесь: 
+-- здесь: `[]`, создание пары поднимается в список Char, очевидно
 
 ```
 test
@@ -1120,17 +1183,17 @@ test
 ### 1.2.12 дополнительные методы `$>, *>`
 
 Дополнительные функции в интерфейсе аппликативного функтора
-(Control.Applicative, Data.Functor)
+(`Control.Applicative, Data.Functor`)
 ```hs
 class Functor ...
-    (<$) :: a -> f b -> f a
     ($>) :: f a -> b -> f b -- структура (контекст) из первого параметра, значение из второго параметра
+    (<$) :: a -> f b -> f a -- структура из второго параметра, значение из первого
 
 class Functor f => Applicative f where
     pure :: a -> f a
     (<*>) :: f (a -> b) -> f a -> f b
-    (<*) :: f a -> f b -> f a
     (*>) :: f a -> f b -> f b -- похоже на flip const; значение берем из второго параметра, эффекты протягиваем из первого и второго
+    (<*) :: f a -> f b -> f a -- аналогично, эффекты полностью, значения из первого параметра
 
 -- (*>) :: f a -> f b -> f b
 ghci> [1,2,3] *> [4,5]
@@ -1171,7 +1234,7 @@ u (*>) v = (pure $ flip const) <*> u <*> v
 
 liftA :: Applicative f => (a -> b) -> f a -> f b
 liftA f a = (pure f) <*> a
-liftA f a = fmap f a
+liftA f a = fmap f a -- liftA и fmap эквивалентны, при условии, что это аппликативный функтор
 
 liftA2 :: Applicative f => (a -> b -> c) -> f a -> f b -> f c
 liftA2 f a b = f <$> a <*> b -- fmap2
@@ -1179,7 +1242,7 @@ liftA2 f a b = f <$> a <*> b -- fmap2
 liftA3 :: Applicative f => (a -> b -> c -> d) -> f a -> f b -> f c -> f d
 liftA3 f a b c = f <$> a <*> b <*> c -- fmap3
 
--- ап две звезды, разворачивание пайплайна
+-- ап две звезды, разворачивание пайплайна в другую сторону
 
 (<**>) :: Applicative f => f a -> f (a -> b) -> f b
 (<**>) = liftA2 (flip ($))
@@ -1205,9 +1268,9 @@ ghci> ("c", 3) <**> (("b", 2) <**> pure (,))
 ```
 repl
 
+### 1.2.14 test
+
 ```hs
-https://stepik.org/lesson/30424/step/14?unit=11041
-TODO
 {--
 Двойственный оператор аппликации `(<**>)` из модуля `Control.Applicative`
 изменяет направление вычислений, не меняя порядок эффектов
@@ -1226,7 +1289,8 @@ infixl 4 <*?>
 можно привести цепочку аппликативных вычислений, 
 дающую разный результат в зависимости от того, какой из этих операторов использовался?
 
-В следующих шести примерах вашей задачей будет привести такие контрпримеры для стандартных типов данных, для которых они существуют.
+В следующих шести примерах вашей задачей будет привести такие 
+контрпримеры для стандартных типов данных, для которых они существуют.
 
 Следует заменить аппликативное выражение в предложении `in`
 на выражение того же типа, однако дающее разные результаты
@@ -1283,11 +1347,79 @@ exprEnv op =
       infixl 4 <??> 
   in length <??> (\_ -> (+5))  -- place for counterexample
 
--- solution
+-- solution: list, either, pair(string, _) -- аппликативы, в которых не-коммутативные эффекты
 
--- нужно оставить оператор <??>
--- вместо него грейдер будет подставлять <**>, <*?> и сравнивать результаты.
--- Вам нужно лишь подобрать такие операнды, при которых результаты "вызова" будут различаться
+{-# LANGUAGE RankNTypes #-}
+import Control.Applicative ((<**>), ZipList(..))
+
+infixl 4 <*?>
+(<*?>) :: Applicative f => f a -> f (a -> b) -> f b
+(<*?>) = flip (<*>)
+
+exprMaybe :: (forall a b . Maybe a -> Maybe (a -> b) -> Maybe b) -> Maybe Int
+exprMaybe op = 
+  let (<??>) = op 
+      infixl 4 <??> 
+  in Just 5 <??> Just (+2) -- place for counterexample -- effects are commutative
+
+exprList :: (forall a b . [a] -> [a -> b] -> [b]) -> [Int]
+exprList op = 
+  let (<??>) = op 
+      infixl 4 <??> 
+--   in [1,2] <??> [(+3),(+4)] -- place for counterexample
+  in [3, 7] <??> [(^2), (+1)] -- order of inner loop, not commutative
+
+exprZipList :: (forall a b . ZipList a -> ZipList (a -> b) -> ZipList b) -> ZipList Int
+exprZipList op = 
+  let (<??>) = op 
+      infixl 4 <??> 
+  in ZipList [1,2] <??> ZipList [(+3),(+4)]  -- place for counterexample -- effects are commutative
+
+exprEither :: (forall a b . Either String a -> Either String (a -> b) -> Either String b) -> Either String Int
+exprEither op = 
+  let (<??>) = op 
+      infixl 4 <??> 
+--   in Left "AA" <??> Right (+1)  -- place for counterexample
+  in (Left "a") <??> (Left "b") -- order of error, not commutative
+
+exprPair :: (forall a b . (String,a) -> (String,a -> b) -> (String,b)) -> (String,Int)
+exprPair op = 
+  let (<??>) = op 
+      infixl 4 <??> 
+--   in ("AA", 3) <??> ("",(+1))  -- place for counterexample
+  in ("foo", 7) <??> ("bar", (+1)) -- mappend for first elem, not commutative for string
+
+exprEnv :: (forall a b . (String -> a) -> (String -> (a -> b)) -> (String -> b)) -> (String -> Int)
+exprEnv op = 
+  let (<??>) = op 
+      infixl 4 <??> 
+  in length <??> (\_ -> (+5))  -- place for counterexample -- effects are commutative
+
+{--
+Задачка на понимание: как альтернативная реализация оператора `<**>` влияет на
+результат `apply over` для аппликативов: Maibe, List, ZipList, Either, Pair, Env
+
+Следовательно, надо посмотреть на детали реализации оператора для каждого из этих аппликативов и
+понять, как влияет на результат изменение реализации
+
+Вкратце, реализация меняет порядок накопления (следования) эффектов, поэтому
+все варианты, где эффекты не-коммутативны -- являются целью на создание контр-примеров.
+
+Удобно воспользоваться функцией `test_1_2_14` для экспериментов в repl.
+test_1_2_14 = (\a b -> (a <**> b, a <*?> b)) -- [1,2] [(+3),(+4)]
+
+> где эффекты некоммутативны: 
+для списков эффект это прямое произведение, оно меняет порядок элементов в упорядоченных парах, 
+для Monoid a => (,) a это mappend, зависит от коммутативности отдельно взятого mappend'а, но для строк это конкатенация и она некоммутативна 
+если один из элементов непустая строка 
+и наконец для Either e эффект это пропагация ошибки e, некоммутативна, если ошибки различны, 
+отсюда кстати ясно почему Maybe коммутативен -- у него ошибки (отсутствующее значение) неразличимы. 
+Эффект ZipList -- длина списка становится минимальной среди всех учавствующих в эффекте списков, 
+коммутативен за счёт коммутативности минимума. 
+А эффект стрелки с окружением это просто протаскивание стрелки с окружением всем элементам, 
+понять коммутативность тут сложнее, но она интуитивно ощущается за счёт того что всюду окружение передается одно и то же, 
+т.е. без изменений, а значит этот эффект можно применять в любом порядке.
+--}
 
 ```
 test
@@ -1326,8 +1458,8 @@ parseTest letter "ab21"
 parseTest -- это функция для вывода результата работы парсера на консоль (Monad IO)
 ghci> :i parseTest
 parseTest ::
-  (Stream s Data.Functor.Identity.Identity t, GHC.Show.Show a) =>
-  Parsec s () a -> s -> GHC.Types.IO () -- Defined in ‘Text.Parsec.Prim’
+  (Stream s Identity t, Show a) =>
+  Parsec s () a -> s -> IO () -- Defined in ‘Text.Parsec.Prim’
 -- разберем сигнатуру
 Parsec s () a -- первый параметр, парсер из потока s в некий a, стейт в виде юнита () игнорится
 s -- второй параметр, входная строка
@@ -1342,8 +1474,8 @@ Left (line 1, column 1): unexpected "1" expecting letter
 
 ghci> :i parse
 parse ::
-  Stream s Data.Functor.Identity.Identity t =>
-  Parsec s () a -> SourceName -> s -> Data.Either.Either ParseError a -- Defined in ‘Text.Parsec.Prim’
+  Stream s Identity t =>
+  Parsec s () a -> SourceName -> s -> Either ParseError a -- Defined in ‘Text.Parsec.Prim’
 -- разберем сигнатуру
 Parsec s () a -- первый параметр, парсер из потока s в некий a, стейт в виде юнита () игнорится
 SourceName -- второй параметр, характеристика источника для трейсинга ошибок
@@ -1360,10 +1492,10 @@ ghci> parseTest vowel "bcd"
 parse error at (line 1, column 1): unexpected "b"
 
 Parsec -- трех-параметрический конструктор типов
-Parsec [Char] u Char
-[Char] -- тип входного потока
-u -- определяемое пользователем состояние, поддержка стейта парсера
-Char -- тип выходного значения
+Parsec [Char] u Char -- где
+-- [Char] -- тип входного потока
+-- u -- определяемое пользователем состояние, поддержка стейта парсера
+-- Char -- тип выходного значения
 
 -- n.b. все параметризовано, можно парсить что угодно
 -- на входе могут быть токены (после лексера) или другие типы
@@ -1373,19 +1505,19 @@ repl
 ```hs
 ghci> :browse Text.Parsec.Char
 alphaNum ::
-  Stream s m GHC.Types.Char => ParsecT s u m GHC.Types.Char
+  Stream s m Char => ParsecT s u m Char
 anyChar ::
-  Stream s m GHC.Types.Char => ParsecT s u m GHC.Types.Char
+  Stream s m Char => ParsecT s u m Char
 char ::
-  Stream s m GHC.Types.Char =>
-  GHC.Types.Char -> ParsecT s u m GHC.Types.Char
+  Stream s m Char =>
+  Char -> ParsecT s u m Char
 ...
 ```
 extra
 
+### 1.3.3 test
+
 ```hs
-https://stepik.org/lesson/42245/step/3?unit=20509
-TODO
 {--
 Какие из следующих примитивных парсеров имеются в библиотеке `Text.Parsec.Char`
 
@@ -1400,6 +1532,27 @@ Select all correct options from the list
 --}
 
 -- solution
+
+- Парсер, разбирающий в точности символ пробела (' ')
+- Парсер, разбирающий в точности символ возврата каретки ('\r')
++ Парсер, разбирающий в точности символ новой строки ('\n')
++ Парсер, разбирающий в точности последовательность символов возврата каретки ('\r') и новой строки ('\n')
++ Парсер, разбирающий произвольный символ
++ Парсер, разбирающий в точности символ табуляции ('\t')
+
+https://hackage.haskell.org/package/parsec-3.1.17.0/docs/Text-Parsec-Char.html
+
+newline :: Stream s m Char => ParsecT s u m Char
+Parses a newline character ('\n'). Returns a newline character.
+
+crlf :: Stream s m Char => ParsecT s u m Char
+Parses a carriage return character ('\r') followed by a newline character ('\n'). Returns a newline character
+
+tab :: Stream s m Char => ParsecT s u m Char
+Parses a tab character ('\t'). Returns a tab character.
+
+char :: Stream s m Char => Char -> ParsecT s u m Char
+char c parses a single character c. Returns the parsed character (i.e. c).
 
 ```
 test
@@ -1437,7 +1590,7 @@ parse error at (line 1, column 4): unexpected "a" expecting digit
 ghci> :i count
 count ::
   Stream s m t =>
-  GHC.Types.Int -> ParsecT s u m a -> ParsecT s u m [a] -- Defined in ‘Text.Parsec.Combinator’
+  Int -> ParsecT s u m a -> ParsecT s u m [a] -- Defined in ‘Text.Parsec.Combinator’
 
 -- endBy: первый парсер, после которого выполняется второй парсер
 ghci> parseTest (count 3 digit `endBy` (char 'b')) "123bc"
@@ -1453,6 +1606,8 @@ endBy ::
   ParsecT s u m a -> ParsecT s u m sep -> ParsecT s u m [a] -- Defined in ‘Text.Parsec.Combinator’
 ```
 repl
+
+### 1.3.5 test
 
 ```hs
 https://stepik.org/lesson/42245/step/5?unit=20509
@@ -1481,10 +1636,12 @@ getList :: Parsec String u [String]
 getList = undefined
 
 -- solution
+
 https://hackage.haskell.org/package/parsec-3.1.11/docs/Text-ParserCombinators-Parsec-Combinator.html
+https://hackage.haskell.org/package/parsec-3.1.17.0/docs/Text-Parsec.html
 
 ```
-test
+[test](./chapter-1/test-1.3.5.hs)
 
 ### 1.3.6 семантика аппликатива Parsec (`pure, <*>`)
 
