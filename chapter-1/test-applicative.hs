@@ -24,10 +24,11 @@ import Prelude (
     show, read, String, Char, Functor, fmap, Bool, otherwise, Int,
     (==), (*), (^), (-), (/), (++), id, const, Maybe (..), null, ($), succ, (.), undefined, Num ((+)),
     length, take, tail, zipWith, Fractional,
-    zip, lookup, flip, Either(..), map, Foldable
+    zip, lookup, flip, Either(..), map, Foldable, return,
+    Bool(..), toInteger,
     )
 
-import Text.Parsec ( Parsec(..), getParserState, parseTest, many, many1 )
+import Text.Parsec ( Parsec(..), getParserState, parseTest )
 import Text.Parsec.Char ( alphaNum, string, string' )
 
 import Data.Char ( Char, digitToInt, isDigit, isLower )
@@ -35,10 +36,10 @@ import Data.Char ( Char, digitToInt, isDigit, isLower )
 import Data.Monoid ( Sum(..) )
 
 import Control.Applicative (
-    Applicative((<*>), pure, (<*)), (<$>), (<**>),
+    Applicative((<*>), pure, (<*)), (<$>), (<**>), (<*), (*>),
     Alternative((<|>), empty),
     ZipList(ZipList), getZipList,
-    liftA, liftA2
+    liftA, liftA2, many,
     )
 
 import GHC.Show ( Show(..) )
@@ -427,3 +428,269 @@ testEnv :: (String -> Int, String -> Int)
 testEnv = test_1_2_14 (\s -> length s) (\s x -> x + (length s))
 runTestEnv' (f1, f2) s = (f1 s, f2 s)
 runTestEnv = runTestEnv' testEnv
+
+
+{--
+Предположим, тип парсера определен следующим образом:
+
+newtype Prs a = Prs { runPrs :: String -> Maybe (a, String) }
+
+Сделайте этот парсер представителем класса типов `Functor`
+
+Реализуйте также парсер `anyChr :: Prs Char`
+удачно разбирающий и возвращающий любой первый символ любой непустой входной строки
+
+GHCi> runPrs anyChr "ABC"
+Just ('A',"BC")
+GHCi> runPrs anyChr ""
+Nothing
+GHCi> runPrs (digitToInt <$> anyChr) "BCD"
+Just (11,"CD")
+--}
+newtype Prs a = Prs { runPrs :: String -> Maybe (a, String) }
+
+instance Functor Prs where -- arrow type, you'll see some lambdas
+  fmap :: (a -> b) -> Prs a -> Prs b -- (a -> b) -> f a -> f a
+  fmap ab (Prs pa) = Prs pb where
+    pb inp = case pa inp of -- pb = \inp -> ... as promised
+        Nothing -> Nothing
+        Just (a, outp) -> Just (ab a, outp)
+
+anyChr :: Prs Char
+anyChr = Prs p where
+    p "" = Nothing
+    p (c:cs) = Just (c, cs)
+
+test20 = runPrs anyChr "ABC" -- Just ('A',"BC")
+test21 = runPrs anyChr "" -- Nothing
+test22 = runPrs (digitToInt <$> anyChr) "BCD" -- Just (11,"CD")
+
+{--
+Сделайте парсер из предыдущей задачи
+
+newtype Prs a = Prs { runPrs :: String -> Maybe (a, String) }
+
+аппликативным функтором с естественной для парсера семантикой:
+
+GHCi> runPrs ((,,) <$> anyChr <*> anyChr <*> anyChr) "ABCDE"
+Just (('A','B','C'),"DE")
+GHCi> runPrs (anyChr *> anyChr) "ABCDE"
+Just ('B',"CDE")
+
+Представитель для класса типов Functor уже реализован
+--}
+instance Applicative Prs where
+  pure :: a -> Prs a
+  pure a = Prs (\s -> Just (a, s))
+
+  (<*>) :: Prs (a -> b) -> Prs a -> Prs b
+  (Prs fun) <*> (Prs pa) = Prs pb where
+    pb str = do
+        (ab, s1) <- fun str -- левый парсер
+        (a, s2) <- pa s1 -- правый парсер
+        return (ab a, s2) -- функция из левого применить к результату правого
+
+test23 = runPrs ((,,) <$> anyChr <*> anyChr <*> anyChr) "ABCDE" -- Just (('A','B','C'),"DE")
+test24 = runPrs (anyChr *> anyChr) "ABCDE" -- Just ('B',"CDE")
+
+
+{--
+Рассмотрим более продвинутый парсер, 
+позволяющий возвращать пользователю причину неудачи при синтаксическом разборе:
+
+newtype PrsE a = PrsE { runPrsE :: String -> Either String (a, String) }
+
+Реализуйте функцию `satisfyE`
+
+satisfyE :: (Char -> Bool) -> PrsE Char 
+
+таким образом, чтобы функция `charE`
+
+charE :: Char -> PrsE Char
+charE c = satisfyE (== c)
+
+обладала бы следующим поведением:
+
+GHCi> runPrsE (charE 'A') "ABC"
+Right ('A',"BC")
+GHCi> runPrsE (charE 'A') "BCD"
+Left "unexpected B"
+GHCi> runPrsE (charE 'A') ""
+Left "unexpected end of input"
+--}
+newtype PrsE a = PrsE { runPrsE :: String -> Either String (a, String) }
+
+satisfyE :: (Char -> Bool) -> PrsE Char
+satisfyE pred = PrsE fun where
+    fun "" = Left "unexpected end of input"
+    fun (c:cs) = if pred c then Right (c, cs) else Left ("unexpected " ++ [c])
+
+charE :: Char -> PrsE Char
+charE c = satisfyE (== c)
+
+test25 = runPrsE (charE 'A') "ABC" -- Right ('A',"BC")
+test26 = runPrsE (charE 'A') "BCD" -- Left "unexpected B"
+test27 = runPrsE (charE 'A') "" -- Left "unexpected end of input"
+
+{--
+Сделайте парсер `PrsE` из предыдущей задачи
+
+newtype PrsE a = PrsE { runPrsE :: String -> Either String (a, String) }
+
+функтором и аппликативным функтором:
+
+GHCi> let anyE = satisfyE (const True)
+GHCi> runPrsE ((,) <$> anyE <* charE 'B' <*> anyE) "ABCDE"
+Right (('A','C'),"DE")
+GHCi> runPrsE ((,) <$> anyE <* charE 'C' <*> anyE) "ABCDE"
+Left "unexpected B"
+GHCi> runPrsE ((,) <$> anyE <* charE 'B' <*> anyE) "AB"
+Left "unexpected end of input"
+--}
+
+-- newtype PrsE a = PrsE { runPrsE :: String -> Either String (a, String) }
+instance Functor PrsE where
+  fmap :: (a -> b) -> PrsE a -> PrsE b -- (a -> b) -> f a -> f b
+  fmap a2b (PrsE parsA) = PrsE parsB where
+    parsB str = do -- either monad
+        (a, rest) <- parsA str
+        return (a2b a, rest)
+
+instance Applicative PrsE where
+  pure :: a -> PrsE a -- a -> f a
+  pure a = PrsE (\s -> return (a, s))
+
+  (<*>) :: PrsE (a -> b) -> PrsE a -> PrsE b -- f (a -> b) -> f a -> f b
+  (PrsE parsA2b) <*> (PrsE parsA) = PrsE parsB where
+    parsB str = do -- either monad
+        (a2b, s1) <- parsA2b str -- left
+        (a, s2) <- parsA s1 -- right
+        return (a2b a, s2) -- combine
+
+anyE = satisfyE (const True)
+test28 = runPrsE ((,) <$> anyE <* charE 'B' <*> anyE) "ABCDE" -- Right (('A','C'),"DE")
+test29 = runPrsE ((,) <$> anyE <* charE 'C' <*> anyE) "ABCDE" -- Left "unexpected B"
+test30 = runPrsE ((,) <$> anyE <* charE 'B' <*> anyE) "AB" -- Left "unexpected end of input"
+
+
+{--
+Сделайте парсер `Prs` представителем класса типов `Alternative`
+с естественной для парсера семантикой
+
+newtype Prs a = Prs { runPrs :: String -> Maybe (a, String) }
+
+GHCi> runPrs (char 'A' <|> char 'B') "ABC"
+Just ('A',"BC")
+GHCi> runPrs (char 'A' <|> char 'B') "BCD"
+Just ('B',"CD")
+GHCi> runPrs (char 'A' <|> char 'B') "CDE"
+Nothing
+
+Представители для классов типов `Functor` и `Applicative` уже реализованы.
+Функцию 
+char :: Char -> Prs Char
+включать в решение не нужно, но полезно реализовать для локального тестирования.
+
+infixl 3 <|> -- более низкий приоритет (от <*>, <$>, ...)
+class (Applicative f) => Alternative f where -- расширим аппликатив
+    empty :: f a -- нейтраль, похоже на моноидальный mempty, но это "нейтральный контекст", без конкретного значения
+    (<|>) :: f a -> f a -> f a -- ассоциативная операция, сигнатура как моноид mappend, не так ли? Нет.
+
+--}
+
+-- newtype Prs a = Prs { runPrs :: String -> Maybe (a, String) }
+instance Alternative Prs where
+  empty :: Prs a -- f a
+  empty = Prs (\_ -> Nothing)
+
+  (<|>) :: Prs a -> Prs a -> Prs a -- f a -> f a -> fa
+  (Prs parsA1) <|> (Prs parsA2) = Prs parsAx where
+    parsAx str = case parsA1 str of -- check left parser
+        Nothing -> parsA2 str -- oops, return right parser
+        Just x -> Just x -- ok, return left parser
+
+charP :: Char -> Prs Char
+charP c = satisfyP (== c)
+
+satisfyP :: (Char -> Bool) -> Prs Char
+satisfyP pred = Prs fun where
+    fun "" = Nothing
+    fun (c:cs) = if pred c then Just (c, cs) else Nothing
+
+test31 = runPrs (charP 'A' <|> charP 'B') "ABC" -- Just ('A',"BC")
+test32 = runPrs (charP 'A' <|> charP 'B') "BCD" -- Just ('B',"CD")
+test33 = runPrs (charP 'A' <|> charP 'B') "CDE" -- Nothing
+
+
+{--
+Реализуйте для парсера `Prs` парсер-комбинатор `many1`
+
+newtype Prs a = Prs { runPrs :: String -> Maybe (a, String) }
+many1 :: Prs a -> Prs [a]
+
+который отличается от `many` только тем, что он терпит неудачу в случае,
+когда парсер-аргумент неудачен на начале входной строки
+
+> runPrs (many1 $ char 'A') "AAABCDE"
+Just ("AAA","BCDE")
+> runPrs (many1 $ char 'A') "BCDE"
+Nothing
+
+Функцию `char :: Char -> Prs Char` включать в решение не нужно, но полезно реализовать для локального тестирования
+--}
+
+-- newtype Prs a = Prs { runPrs :: String -> Maybe (a, String) }
+many1 :: Prs a -> Prs [a]
+many1 parsA = (:) <$> parsA <*> (many1 parsA <|> pure [])
+-- альтернатив сожрет ошибку только начиная со второго разбора
+
+test34 = runPrs (many1 $ charP 'A') "AAABCDE" -- Just ("AAA","BCDE")
+test35 = runPrs (many1 $ charP 'A') "BCDE" -- Nothing
+
+{--
+nat :: Prs Int
+
+mult :: Prs Int
+mult = (*) <$> nat <* char '*' <*> nat
+
+Реализуйте парсер `nat` для натуральных чисел,
+так чтобы парсер `mult` обладал таким поведением
+
+GHCi> runPrs mult "14*3"
+Just (42,"")
+GHCi> runPrs mult "64*32"
+Just (2048,"")
+GHCi> runPrs mult "77*0"
+Just (0,"")
+GHCi> runPrs mult "2*77AAA"
+Just (154,"AAA")
+
+Реализацию функции 
+char :: Char -> Prs Char 
+следует включить в присылаемое решение, только если она нужна для реализации парсера `nat`
+--}
+-- import Data.Char (isDigit)
+nat :: Prs Int
+nat = read <$> many1 digitP
+
+digitP :: Prs Char
+digitP = satisfyP isDigit
+
+-- many1 :: Prs a -> Prs [a]
+-- many1 parsA = (:) <$> parsA <*> (many1 parsA <|> pure [])
+
+-- satisfyP :: (Char -> Bool) -> Prs Char
+-- satisfyP pred = Prs fun where
+--     fun "" = Nothing
+--     fun (c:cs) = if pred c then Just (c, cs) else Nothing
+
+-- charP :: Char -> Prs Char
+-- charP c = satisfyP (== c)
+
+mult :: Prs Int
+mult = (*) <$> nat <* charP '*' <*> nat
+
+test36 = runPrs mult "14*3" -- Just (42,"")
+test37 = runPrs mult "64*32" -- Just (2048,"")
+test38 = runPrs mult "77*0" -- Just (0,"")
+test39 = runPrs mult "2*77AAA" -- Just (154,"AAA")

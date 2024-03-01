@@ -1881,9 +1881,9 @@ ghci> apply (digitToInt <$> anyChar) "quix"
 ```
 repl
 
+### 1.4.4 test
+
 ```hs
-https://stepik.org/lesson/30425/step/4?unit=11042
-TODO
 {--
 Предположим, тип парсера определен следующим образом:
 
@@ -1907,6 +1907,34 @@ anyChr :: Prs Char
 anyChr = undefined
 
 -- solution
+
+newtype Prs a = Prs { runPrs :: String -> Maybe (a, String) }
+
+instance Functor Prs where -- arrow type, you'll see some lambdas
+  fmap :: (a -> b) -> Prs a -> Prs b -- (a -> b) -> f a -> f a
+  fmap ab (Prs pa) = Prs pb where
+    pb inp = case pa inp of -- pb = \inp -> ... as promised
+        Nothing -> Nothing
+        Just (a, outp) -> Just (ab a, outp)
+
+anyChr :: Prs Char
+anyChr = Prs p where
+    p "" = Nothing
+    p (c:cs) = Just (c, cs)
+
+-- alternative (Maybe is a monad)
+
+instance Functor Prs where
+  fmap f prs = Prs func where
+    func str = do
+      (x, str) <- runPrs prs str
+      return (f x, str)
+
+anyChr :: Prs Char
+anyChr = Prs func where
+  func str = do
+    (x:xs) <- Just str
+    return (x, xs)
 
 ```
 test
@@ -1962,9 +1990,9 @@ ghci> apply (anyChar <* anyChar) "abcde"
 ```
 repl
 
+### 1.4.6 test
+
 ```hs
-https://stepik.org/lesson/30425/step/6?unit=11042
-TODO
 {--
 Сделайте парсер из предыдущей задачи
 
@@ -1984,6 +2012,37 @@ instance Applicative Prs where
   (<*>) = undefined
 
 -- solution
+
+instance Applicative Prs where
+  -- pure :: a -> Prs a
+  pure a = Prs (\s -> Just (a, s))
+  -- (<*>) :: Prs (a -> b) -> Prs a -> Prs b
+  (Prs fun) <*> (Prs pa) = Prs pb where -- in maybe monad
+    pb str = do
+        (ab, s1) <- fun str -- левый парсер
+        (a, s2) <- pa s1 -- правый парсер
+        return (ab a, s2) -- функция из левого применить к результату правого
+
+-- alternative
+
+instance Applicative Prs where
+  pure = Prs . (Just .) . (,)
+  pf <*> pv = Prs myFunc
+   where
+     myFunc s = do
+       (f, rest) <- runPrs pf s
+       (v, rest') <- runPrs pv rest
+       return (f v, rest')
+
+import Control.Monad ((<=<))
+import Control.Arrow (first)
+import Data.Bifunctor (bimap)
+(.:) :: (c -> d) -> (a -> b -> c) -> a -> b -> d
+unary .: binary = (.) unary . binary
+infixr 8 .:
+instance Applicative Prs where
+	pure = Prs <$> pure .: (,)
+	Prs pf <*> Prs pv = Prs $ uncurry fmap . bimap first pv <=< pf
 
 ```
 test
@@ -2026,11 +2085,12 @@ ghci> apply multiplication "2*5"
 ```
 repl
 
+### 1.4.8 test
+
 ```hs
-https://stepik.org/lesson/30425/step/8?unit=11042
-TODO
 {--
-Рассмотрим более продвинутый парсер, позволяющий возвращать пользователю причину неудачи при синтаксическом разборе:
+Рассмотрим более продвинутый парсер, 
+позволяющий возвращать пользователю причину неудачи при синтаксическом разборе:
 
 newtype PrsE a = PrsE { runPrsE :: String -> Either String (a, String) }
 
@@ -2060,14 +2120,22 @@ charE c = satisfyE (== c)
 
 -- solution
 
+satisfyE :: (Char -> Bool) -> PrsE Char
+satisfyE pred = PrsE fun where
+    fun "" = Left "unexpected end of input"
+    fun (c:cs) = if pred c then Right (c, cs) else Left ("unexpected " ++ [c])
+
+charE :: Char -> PrsE Char
+charE c = satisfyE (== c)
+
 ```
 test
 
+### 1.4.9 test
+
 ```hs
-https://stepik.org/lesson/30425/step/9?unit=11042
-TODO
 {--
-Сделайте парсер из предыдущей задачи
+Сделайте парсер `PrsE` из предыдущей задачи
 
 newtype PrsE a = PrsE { runPrsE :: String -> Either String (a, String) }
 
@@ -2090,10 +2158,45 @@ instance Applicative PrsE where
 
 -- solution
 
+instance Functor PrsE where
+  fmap :: (a -> b) -> PrsE a -> PrsE b -- (a -> b) -> f a -> f b
+  fmap a2b (PrsE parsA) = PrsE parsB where
+    parsB str = do -- either monad
+        (a, rest) <- parsA str
+        return (a2b a, rest)
+
+instance Applicative PrsE where
+  pure :: a -> PrsE a -- a -> f a
+  pure a = PrsE (\s -> return (a, s))
+
+  (<*>) :: PrsE (a -> b) -> PrsE a -> PrsE b -- f (a -> b) -> f a -> f b
+  (PrsE parsA2b) <*> (PrsE parsA) = PrsE parsB where
+    parsB str = do -- either monad
+        (a2b, s1) <- parsA2b str -- left
+        (a, s2) <- parsA s1 -- right
+        return (a2b a, s2) -- combine
+
+-- alternative
+
+import Control.Monad ((<=<))
+import Control.Arrow (first)
+import Data.Bifunctor (bimap)
+
+(.:) :: (c -> d) -> (a -> b -> c) -> a -> b -> d
+unary .: binary = (.) unary . binary
+infixr 8 .:
+
+instance Functor PrsE where
+	fmap f (PrsE p) = PrsE $ fmap (first f) . p
+
+instance Applicative PrsE where
+	pure = PrsE <$> pure .: (,)
+	PrsE pf <*> PrsE pv = PrsE $ uncurry fmap . bimap first pv <=< pf
+
 ```
 test
 
-### 1.4.10 type-class Alternative
+### 1.4.10 type-class Alternative, laws
 
 https://hackage.haskell.org/package/base-4.19.0.0/docs/Control-Applicative.html#g:2
 
@@ -2120,7 +2223,7 @@ instance (Monoid a) => Monoid (Maybe a) where -- если а моноид, мо�
     (Just m1) `mappend` (Just m2) = Just (m1 `mappend` m2)
 -- реализация прячет Nothing и склеивает (моноид) значения
 
--- альтернативная реализация, прокидывает первое (левое) не-пустое значение, склейка невозможна (нет контекста моноид)
+-- альтернативная реализация, без моноида: прокидывает первое (левое) не-пустое значение, склейка невозможна (нет контекста моноид)
 -- альтернативная реализация упакована в ньютайп, во избежание конфликта имен
 newtype First a = First { getFirst :: Maybe a }
 -- по сути это вот это:
@@ -2139,7 +2242,8 @@ instance Monoid (Maybe a) where
 infixl 3 <|> -- более низкий приоритет (от <*>, <$>, ...)
 class (Applicative f) => Alternative f where -- расширим аппликатив
     empty :: f a -- нейтраль, похоже на моноидальный mempty, но это "нейтральный контекст", без конкретного значения
-    (<|>) :: f a -> f a -> f a -- ассоциативная операция, сигнатура как моноид mappend, не так ли? нет, но похоже. Здесь это "а в контексте".
+    (<|>) :: f a -> f a -> f a -- ассоциативная операция, сигнатура как моноид mappend, не так ли? 
+    -- нет, но похоже. Здесь это "а в контексте".
 -- empty: the identity of `<|>`
 -- <|>: associative binary operation
 
@@ -2191,7 +2295,9 @@ repl
 
 Почему альтернатив это не моноид?
 
-> `MonoidK` — это моноид для конструкторов типов вида `* -> *`, без всяких ограничений на applicative, т.е. alternative без applicative.
+Поскольку просто `Monoid` для кайндов `* -> *` невозможен, то придумали
+> `MonoidK` — это моноид для конструкторов типов вида `* -> *`, (т.е. как бы альтернатив, но) без всяких ограничений на applicative, 
+т.е. alternative без applicative.
 - https://typelevel.org/cats/typeclasses/monoidk.html
 - https://typelevel.org/cats/typeclasses/semigroupk.html
 
@@ -2202,7 +2308,7 @@ repl
 Семантика applied over `<*>` в парсере: применить левый парсер к входной строке, на хвосте применить правый парсер;
 левую функцию применить к результату правого парсера.
 
-Хотим в наш Parser добавить семантику "альтернативы".
+Хотим в наш Parser добавить семантику "альтернативы" (обработка ошибок).
 Семантика alternative `<|>` в парсере: применить левый, если успешно, то это и есть результат;
 иначе применить правый и вернуть его результат.
 
@@ -2210,11 +2316,11 @@ repl
 instance Alternative Parser where
     empty :: Parser a
     empty = Parser f where -- парсер это функция, стрелка
-        f _ = [] -- результат работы парсера это список пар
+        f _ = [] -- результат работы парсера это список пар, пустой список это empty
     (<|>) :: Parser a -> Parser a -> Parser a
     p <|> q = Parser f where -- левый или правый-если-левый-сломан
         f s = let ps = apply p s in -- применим левый парсер
-        if null ps -- и проверим результат
+        if null ps -- и проверим результат: список пустой?
             then apply q s
             else ps
 
@@ -2252,9 +2358,9 @@ morse = Parser f1 <|> Parser f2 <|> Parser f3 where
 ```
 extra
 
+### 1.4.12 test
+
 ```hs
-https://stepik.org/lesson/30425/step/12?unit=11042
-TODO
 {--
 Сделайте парсер `Prs` представителем класса типов `Alternative`
 с естественной для парсера семантикой
@@ -2278,7 +2384,27 @@ instance Alternative Prs where
   (<|>) = undefined
 
 -- solution
-import Control.Applicative
+
+instance Alternative Prs where
+  empty :: Prs a -- f a
+  empty = Prs (\_ -> Nothing)
+
+  (<|>) :: Prs a -> Prs a -> Prs a -- f a -> f a -> fa
+  (Prs parsA1) <|> (Prs parsA2) = Prs parsAx where
+    parsAx str = case parsA1 str of -- check left parser
+        Nothing -> parsA2 str -- oops, return right parser
+        Just x -> Just x -- ok, return left parser
+
+-- alternatives
+
+import Control.Monad
+instance Alternative Prs where
+  empty = Prs $ const Nothing
+  (Prs f1) <|> (Prs f2) = Prs $ liftM2 (<|>) f1 f2
+
+instance Alternative Prs where
+  empty = Prs $ \s -> Nothing
+  (Prs f) <|> (Prs g) = Prs $ \s -> f s <|> g s
 
 ```
 test
@@ -2290,7 +2416,7 @@ test
 
 Создадим парсер выборки символов в нижнем регистре.
 ```hs
--- первая попытка, рекурсивное использование парсера одной буквы
+-- первая попытка, рекурсивное использование парсера одной буквы (спойлер: фейл)
 lowers :: Parser String
 lowers = (pure (:)) <*> lower <*> lowers -- рекурсивное построение списка
 
@@ -2328,7 +2454,7 @@ many p = (:) <$> p <*> (many p) <|> (pure [])
 ghci> apply (many digit) "123abc"
 [([1,2,3],"abc")]
 
--- парсер many всегда успешен, неудач у него не бывает.
+-- парсер many всегда успешен, неудач у него не бывает. Такая побочка альтернатива
 ghci> apply (many digit) "abc"
 [([],"abc")] -- удачное завершение парсера, с пустым результатом
 ghci> apply (digit) "abc"
@@ -2337,9 +2463,9 @@ ghci> apply (digit) "abc"
 ```
 repl
 
+### 1.4.14 test
+
 ```hs
-https://stepik.org/lesson/30425/step/14?unit=11042
-TODO
 {--
 Реализуйте для парсера `Prs` парсер-комбинатор `many1`
 
@@ -2361,14 +2487,28 @@ many1 = undefined
 
 -- solution
 
+many1 :: Prs a -> Prs [a]
+many1 parsA = (:) <$> parsA <*> (many1 parsA <|> pure []) -- альтернатив сожрет ошибку только начиная со второго разбора
+
+-- alternatives
+
+many1 :: Alternative f => f a -> f [a]
+many1 p = (:) <$> p <*> many p
+> many реализован для Alternative, а не для Parser, а поэтому доступен и тут.
+Собственно, many1 можно тоже сразу для Alternative реализовать
+
+many1 :: Prs a -> Prs [a]
+many1 = some
+
 ```
 test
 
+### 1.4.15 test
+
 ```hs
-https://stepik.org/lesson/30425/step/15?unit=11042
-TODO
 {--
 nat :: Prs Int
+
 mult :: Prs Int
 mult = (*) <$> nat <* char '*' <*> nat
 
@@ -2392,7 +2532,22 @@ nat :: Prs Int
 nat = undefined
 
 -- solution
--- от студента нужен только работающий nat, а mult и char мы в тестирующей части используем свои
+
+import Data.Char (isDigit)
+
+nat :: Prs Int
+nat = read <$> many1 digitP
+
+many1 :: Prs a -> Prs [a]
+many1 parsA = (:) <$> parsA <*> (many1 parsA <|> pure [])
+
+digitP :: Prs Char
+digitP = satisfyP isDigit
+
+satisfyP :: (Char -> Bool) -> Prs Char
+satisfyP pred = Prs fun where
+    fun "" = Nothing
+    fun (c:cs) = if pred c then Just (c, cs) else Nothing
 
 ```
 test
