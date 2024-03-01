@@ -38,7 +38,7 @@ import Control.Applicative (
     Applicative((<*>), pure, (<*)), (<$>), (<**>),
     Alternative((<|>), empty),
     ZipList(ZipList), getZipList,
-    liftA, liftA2
+    liftA, liftA2, (*>), (<*)
     )
 
 import GHC.Show ( Show(..) )
@@ -64,8 +64,15 @@ expecting digit
 Совет: изучите парсер-комбинаторы, доступные в модуле `Text.Parsec`, и постарайтесь найти наиболее компактное решение.
 --}
 -- import Text.Parsec
--- getList :: Parsec String u [String]
-getList = let elem = many1 digit <* optional (char ';') in many1 elem
+number :: Parsec String u String
+number = many1 digit
+
+sepNumber :: Parsec String u String
+sepNumber = (char ';') *> many1 digit
+
+getList :: Parsec String u [String]
+getList = (:) <$> number <*> many sepNumber
+-- getList = let elem = many1 digit <* optional (char ';') in many1 elem
 -- getList = (many1 digit) `sepBy` (char ',')
 
 {--
@@ -80,3 +87,23 @@ getList = do
 test20 = parseTest getList "1;234;56" -- ["1","234","56"]
 test21 = parseTest getList "1;234;56;" -- parse error at (line 1, column 10): unexpected end of input expecting digit
 test22 = parseTest getList "1;;234;56" -- parse error at (line 1, column 3): unexpected ";" expecting digit
+
+
+{--
+Используя аппликативный интерфейс `Parsec`, реализуйте функцию `ignoreBraces`
+которая принимает три аргумента-парсера. 
+Первый парсер разбирает текст, интерпретируемый как открывающая скобка, 
+второй — как закрывающая, 
+а третий разбирает весь входной поток, расположенный между этими скобками
+Возвращаемый парсер возвращает результат работы третьего парсера, скобки игнорируются
+
+GHCi> test = ignoreBraces (string "[[") (string "]]") (many1 letter)
+GHCi> parseTest test "[[ABC]]DEF"
+"ABC"
+--}
+-- import Text.Parsec
+ignoreBraces :: Parsec [Char] u a -> Parsec [Char] u b -> Parsec [Char] u c -> Parsec [Char] u c
+ignoreBraces leftB rightB content = leftB *> content <* rightB
+
+test = ignoreBraces (string "[[") (string "]]") (many1 letter)
+test23 = parseTest test "[[ABC]]DEF" -- "ABC"

@@ -1610,8 +1610,6 @@ repl
 ### 1.3.5 test
 
 ```hs
-https://stepik.org/lesson/42245/step/5?unit=20509
-TODO
 {--
 Реализуйте парсер `getList`, который разбирает строки из чисел, разделенных точкой с запятой,
 и возвращает список строк, представляющих собой эти числа:
@@ -1637,8 +1635,39 @@ getList = undefined
 
 -- solution
 
+import Text.Parsec
+number :: Parsec String u String
+number = many1 digit
+sepNumber :: Parsec String u String
+sepNumber = (char ';') *> many1 digit
+getList :: Parsec String u [String]
+getList = (:) <$> number <*> many sepNumber
+
 https://hackage.haskell.org/package/parsec-3.1.11/docs/Text-ParserCombinators-Parsec-Combinator.html
 https://hackage.haskell.org/package/parsec-3.1.17.0/docs/Text-Parsec.html
+Есть мнение, что логика такая: собрать в список: один парсер-числа, ноль-и-больше парсер-семиколумн+парсер-числа
+
+-- alternatives
+
+import Control.Applicative
+import Text.Parsec
+getList :: Parsec String u [String]
+getList = some digit `sepBy` char ';'
+
+import Text.Parsec as P
+getList :: Parsec String u [String]
+getList = num `P.sepBy` sep where
+    num = P.many1 P.digit
+    sep = P.char ';'
+
+import Text.Parsec
+getList :: Parsec String u [String]
+getList = do
+  first <- many1 digit
+  next <- remaining
+  return (first : next)
+remaining =  (char ';' >> getList) <|> (return [])   
+
 
 ```
 [test](./chapter-1/test-1.3.5.hs)
@@ -1650,7 +1679,8 @@ https://hackage.haskell.org/package/parsec-3.1.17.0/docs/Text-Parsec.html
 
 `pure` игнорирует первые параметры конструктора Parsec и возвращает переданное значение, завернутое в конструктор Parsec.
 
-`applied over` соединяет два парсера, где первый откусывает от входа свою часть, второй работает уже с хвостом входа;
+`applied over` соединяет два парсера, где первый откусывает от входа свою часть, 
+второй работает уже с хвостом входа;
 результаты обоих обрабатывается поднятой-в-аппликатив-функцией.
 Если где-то в цепочке вылезла ошибка, весь пайплайн выдает эту ошибку.
 ```hs
@@ -1698,9 +1728,9 @@ ghci> parseTest p1 "abc  123"
 ```
 repl
 
+### 1.3.7 test
+
 ```hs
-https://stepik.org/lesson/42245/step/7?unit=20509
-TODO
 {--
 Используя аппликативный интерфейс `Parsec`, реализуйте функцию `ignoreBraces`
 которая принимает три аргумента-парсера. 
@@ -1717,10 +1747,14 @@ import Text.Parsec
 ignoreBraces :: Parsec [Char] u a -> Parsec [Char] u b -> Parsec [Char] u c -> Parsec [Char] u c
 ignoreBraces = undefined
 
--- solution
+-- solution: думать и искать не надо, надо помнить материал лекций
+
+import Text.Parsec
+ignoreBraces :: Parsec [Char] u a -> Parsec [Char] u b -> Parsec [Char] u c -> Parsec [Char] u c
+ignoreBraces leftB rightB content = leftB *> content <* rightB
 
 ```
-test
+[test](./chapter-1/test-1.3.5.hs)
 
 ## chapter 1.4, Аппликативный парсер своими руками
 
