@@ -25,7 +25,7 @@ import Prelude (
     (==), (*), (^), (-), (/), (++), id, const, Maybe (..), null, ($), succ, (.), undefined, Num ((+)),
     length, take, tail, zipWith, Fractional,
     zip, lookup, flip, Either(..), map, Foldable, return,
-    Bool(..), toInteger,
+    Bool(..), toInteger, Integer(..)
     )
 
 import Text.Parsec ( Parsec(..), getParserState, parseTest )
@@ -694,3 +694,100 @@ test36 = runPrs mult "14*3" -- Just (42,"")
 test37 = runPrs mult "64*32" -- Just (2048,"")
 test38 = runPrs mult "77*0" -- Just (0,"")
 test39 = runPrs mult "2*77AAA" -- Just (154,"AAA")
+
+
+{--
+Населите допустимыми нерасходящимися выражениями следующие типы 
+
+type A   = ((,) Integer |.| (,) Char) Bool
+type B t = ((,,) Bool (t -> t) |.| Either String) Int
+type C   = (|.|) ((->) Bool) ((->) Integer) Integer
+--}
+
+{--
+infixr 9 |.|
+newtype (|.|) f g a = Cmps { getCmps :: f (g a) } deriving (Eq, Show)
+instance (Functor f, Functor g) => Functor (f |.| g) where
+    fmap h (Cmps x) = Cmps $ fmap (fmap h) x
+instance (Applicative f, Applicative g) => Applicative (f |.| g) where
+    pure = Cmps . pure . pure
+    Cmps h <*> Cmps x = Cmps $ (fmap (<*>) h) <*> x
+--}
+
+type A   = ((,) Integer |.| (,) Char) Bool
+-- Пара инт после пары чар после бул
+
+type B t = ((,,) Bool (t -> t) |.| Either String) Int
+-- тупл-бул-функ после ийзер стринг после инт
+
+type C   = (|.|) ((->) Bool) ((->) Integer) Integer
+-- арр-фром-бул после арр-фром-инт после инт
+-- newtype (|.|) f g a = Cmps { getCmps :: f (g a) } deriving (Eq, Show)
+-- a: Integer
+-- g: Integer -> Integer
+-- f: Bool -> g = Bool -> Integer -> Integer
+
+a :: A
+a = Cmps $ (42, ('c', True))
+
+b :: B t
+b = Cmps $ (True, id, either) where either = Left "foo"
+
+c :: C
+c  = Cmps biToi where
+    biToi :: Bool -> Integer -> Integer
+    biToi = \b i -> 42
+-- c  = Cmps (fromBool . fromInt 42) where 
+--     fromBool b i = i
+--     fromInt i b = i
+
+
+{--
+Сделайте тип `Cmps3`
+представителем класса типов `Functor`
+при условии, что первые его три параметра являются функторами:
+
+newtype Cmps3 f g h a = Cmps3 { getCmps3 :: f (g (h a)) } 
+  deriving (Eq,Show) 
+
+GHCi> fmap (^2) $ Cmps3 [[[1],[2,3,4],[5,6]],[],[[7,8],[9,10,11]]]
+Cmps3 {getCmps3 = [[[1],[4,9,16],[25,36]],[],[[49,64],[81,100,121]]]}
+--}
+newtype Cmps3 f g h a = Cmps3 { getCmps3 :: f (g (h a)) } deriving (Eq,Show) 
+
+instance (Functor f, Functor g, Functor h) => Functor (Cmps3 f g h) where
+    fmap :: (a -> b) -> Cmps3 f g h a -> Cmps3 f g h b
+    fmap aToB (Cmps3 fgha) = Cmps3 fghb where
+        fghb = (fmap . fmap) (fmap aToB) fgha
+
+test40 = getCmps3 $ succ <$> Cmps3 (Just ["abc"]) -- Just ["bcd"]
+test41 = fmap (^2) $ Cmps3 [[[1],[2,3,4],[5,6]],[],[[7,8],[9,10,11]]] -- Cmps3 {getCmps3 = [[[1],[4,9,16],[25,36]],[],[[49,64],[81,100,121]]]}
+
+
+{--
+Напишите универсальные функции
+
+unCmps3 :: Functor f => (f |.| g |.| h) a -> f (g (h a))
+unCmps4 :: (Functor f2, Functor f1) => (f2 |.| f1 |.| g |.| h) a -> f2 (f1 (g (h a)))
+
+позволяющие избавляться от синтаксического шума для композиции нескольких функторов:
+
+GHCi> pure 42 :: ([] |.| [] |.| []) Int
+Cmps {getCmps = [Cmps {getCmps = [[42]]}]}
+GHCi> unCmps3 (pure 42 :: ([] |.| [] |.| []) Int)
+[[[42]]]
+GHCi> unCmps3 (pure 42 :: ([] |.| Maybe |.| []) Int)
+[Just [42]]
+GHCi> unCmps4 (pure 42 :: ([] |.| [] |.| [] |.| []) Int)
+[[[[42]]]]
+--}
+unCmps3 :: (Functor f) => (f |.| g |.| h) a -> f (g (h a))
+unCmps3 (Cmps f) = fmap getCmps f
+
+unCmps4 :: (Functor f2, Functor f1) => (f2 |.| f1 |.| g |.| h) a -> f2 (f1 (g (h a)))
+unCmps4 (Cmps f) = (fmap . fmap) getCmps (fmap getCmps f)
+
+test42 = pure 42 :: ([] |.| [] |.| []) Int -- Cmps {getCmps = [Cmps {getCmps = [[42]]}]}
+test43 = unCmps3 (pure 42 :: ([] |.| [] |.| []) Int) -- [[[42]]]
+test44 = unCmps3 (pure 42 :: ([] |.| Maybe |.| []) Int) -- [Just [42]]
+test45 = unCmps4 (pure 42 :: ([] |.| [] |.| [] |.| []) Int) -- [[[[42]]]]
