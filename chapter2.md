@@ -4,9 +4,19 @@
 
 [code sandbox](./chapter-2/test-effects.hs)
 
-Мотивация: ???
+## Мотивация
 
-definitions: ???
+Обобщение сверток: Foldable.
+Traversable: как-бы-свертка но с сохранением структуры.
+Applicative vs Monad: нюансы работы с эффектами, порядок вычислений (направление пайплайна).
+Applicative-Alternative vs Monad-MonadPlus: свойства моноида-суммы для монад, сравнение с альтернативом (для аппликатива).
+
+## definitions
+
+- Foldable
+- Traversable
+- MonadFail
+- MonadPlus
 
 ## chapter 2.1, Класс типов Foldable
 

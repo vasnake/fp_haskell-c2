@@ -1,5 +1,11 @@
+-- {-# LANGUAGE InstanceSigs #-} -- позволяет писать сигнатуры для инстансов
+-- {-# LANGUAGE FunctionalDependencies #-}
+-- {-# LANGUAGE MultiParamTypeClasses #-}
 -- {-# LANGUAGE TypeOperators #-} -- для разрешения `|.|` в качестве имени оператора над типами
 -- {-# LANGUAGE PolyKinds #-}
+
+{-# OPTIONS_GHC -Wno-noncanonical-monad-instances #-}
+{-# OPTIONS_GHC -Wno-noncanonical-monoid-instances #-}
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 
 {-# HLINT ignore "Use traverse_" #-}
