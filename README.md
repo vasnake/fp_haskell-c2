@@ -52,3 +52,4 @@ The standard Haskell libraries feature a number of type classes with algebraic o
 - ListT done right https://wiki.haskell.org/ListT_done_right
 - Understanding Functional Dependencies via Constraint Handling Rules https://www.google.com/search?q=Understanding+Functional+Dependencies+via+Constraint+Handling+Rules
 - Functional dependencies https://wiki.haskell.org/Functional_dependencies
+- creating data structures like cyclic or doubly linked lists https://wiki.haskell.org/Tying_the_Knot

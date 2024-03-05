@@ -13,6 +13,8 @@
 {-# HLINT ignore "Using foldr on tuple" #-}
 {-# HLINT ignore "Using maximum on tuple" #-}
 {-# HLINT ignore "Use print" #-}
+{-# HLINT ignore "Redundant bracket" #-}
+{-# HLINT ignore "Move brackets to avoid $" #-}
 
 module TestEffects where
 
@@ -63,8 +65,8 @@ testTree = Branch (Branch (Branch Nil 1 Nil) 2 (Branch Nil 3 Nil)) 4 (Branch Nil
 
 instance Foldable Tree where
     foldr f ini Nil = ini
-    foldr f ini (Branch l x r) = f x (foldr f iniR l) where iniR = foldr f ini r -- pre-order
-    -- foldr f ini (Branch l x r) = foldr f (f x iniR) l  where iniR = (foldr f ini r) -- in-order
+    -- foldr f ini (Branch l x r) = f x (foldr f iniR l) where iniR = foldr f ini r -- pre-order
+    foldr f ini (Branch l x r) = foldr f (f x iniR) l  where iniR = (foldr f ini r) -- in-order
 
 treeToList :: Tree a -> [a]
 treeToList = foldr (:) []
@@ -153,3 +155,151 @@ pythags = do
 pythagsL = [(x,y,z) | z <- [1..], x <- [1..z], y <- [x..z], x^2 + y^2 == z^2]
 test21 = msum [Nothing, Just 3, Just 5, Nothing]
 test22 = mfilter (>3) (Just 4)
+
+
+{--
+Сделайте тип
+
+data Triple a = Tr a a a  deriving (Eq, Show)
+
+представителем класса типов `Foldable`:
+
+GHCi> foldr (++) "!!" (Tr "ab" "cd" "efg")
+"abcdefg!!"
+GHCi> foldl (++) "!!" (Tr "ab" "cd" "efg")
+"!!abcdefg"
+--}
+
+-- class Foldable t where
+--     foldr :: (a -> b -> b) -> b -> t a -> b
+--     foldl :: (b -> a -> b) -> b -> t a -> b
+
+data Triple a = Tr a a a  deriving (Eq, Show)
+instance Foldable Triple where
+    -- foldr :: (a -> b -> b) -> b -> Triple a -> b
+    -- foldr f ini (Tr x y z) = f x (f y (f z ini))
+    -- foldr f ini (Tr x y z) = x `f` (y `f` (z `f` ini))
+
+    -- foldMap :: (Monoid m) => (a -> m) -> Triple a -> m
+    -- Map each element of the structure into a monoid, and combine the results with (<>).
+    -- This fold is right-associative and lazy in the accumulator.
+    foldMap f (Tr x y z) = (f x) `mappend` ((f y) `mappend` (f z))
+
+test23 = foldr (++) "!!" (Tr "ab" "cd" "efg") -- "abcdefg!!"
+test24 = foldl (++) "!!" (Tr "ab" "cd" "efg") -- "!!abcdefg"
+
+
+{--
+Для реализации свертки двоичных деревьев нужно выбрать алгоритм обхода узлов дерева
+https://en.wikipedia.org/wiki/Tree_traversal
+
+Сделайте двоичное дерево `Tree`
+
+data Tree a = Nil | Branch (Tree a) a (Tree a) deriving (Eq, Show)
+
+представителем класса типов `Foldable`
+реализовав симметричную стратегию (in-order traversal)
+
+Реализуйте также три другие стандартные стратегии 
+(pre-order traversal, post-order traversal и level-order traversal), 
+сделав типы-обертки представителями класса `Foldable`
+
+newtype Preorder a   = PreO   (Tree a)    deriving (Eq, Show)
+newtype Postorder a  = PostO  (Tree a)    deriving (Eq, Show)
+newtype Levelorder a = LevelO (Tree a)    deriving (Eq, Show)
+
+GHCi> tree = Branch (Branch Nil 1 (Branch Nil 2 Nil)) 3 (Branch Nil 4 Nil)
+GHCi> foldr (:) [] tree
+[1,2,3,4]
+GHCi> foldr (:) [] $ PreO tree
+[3,1,2,4]
+GHCi> foldr (:) [] $ PostO tree
+[2,1,4,3]
+GHCi> foldr (:) [] $ LevelO tree
+[3,1,4,2]
+
+In-order, LNR
+Recursively traverse the current node's left subtree.
+Visit the current node.
+Recursively traverse the current node's right subtree
+
+Pre-order, NLR
+Visit the current node.
+Recursively traverse the current node's left subtree.
+Recursively traverse the current node's right subtree.
+
+Post-order, LRN
+Recursively traverse the current node's left subtree.
+Recursively traverse the current node's right subtree.
+Visit the current node.
+
+Через рекурсию порядки обхода дерева описываются просто:
+
+flatTree :: Tree a -> [a]
+flatTree Nil = [] 
+flatTree (Branch l x r) = 
+   flatTree l ++ [x] ++ flatTree r  -- In-order
+   [x] ++ flatTree l ++ flatTree r  -- Pre-order
+   flatTree l ++ flatTree r ++ [x]  -- Post-order
+Далее принцип такой -- самое правое слагаемое идёт как ini в очередной foldr
+
+           3
+         /   \
+        1     4
+         \
+          2
+--}
+
+-- data Tree a = Nil | Branch (Tree a) a (Tree a) deriving (Eq, Show)
+-- instance Foldable Tree where
+--     foldr f ini Nil = ini
+--     foldr f ini (Branch l x r) = foldr f (f x iniR) l  where iniR = (foldr f ini r) -- in-order, LNR
+
+newtype Preorder a = PreO (Tree a) deriving (Eq, Show)
+instance Foldable Preorder where
+    foldr :: (a -> b -> b) -> b -> Preorder a -> b
+    foldr f ini (PreO Nil) = ini
+    foldr f ini (PreO (Branch l x r)) = f x (foldr f iniR (PreO l)) where iniR = foldr f ini (PreO r) -- pre-order, NLR
+
+newtype Postorder a = PostO (Tree a) deriving (Eq, Show)
+instance Foldable Postorder where
+    foldr :: (a -> b -> b) -> b -> Postorder a -> b
+    foldr f ini (PostO Nil) = ini
+    foldr f ini (PostO (Branch l x r)) = foldr f foldedRight (PostO l)  where -- post-order, LRN
+        foldedRight = foldr f foldedNode (PostO r) -- RN
+        foldedNode = f x ini
+
+newtype Levelorder a = LevelO (Tree a) deriving (Eq, Show)
+instance Foldable Levelorder where
+    -- Map each element of the structure into a monoid, and combine the results with (<>).
+    -- This fold is right-associative and lazy in the accumulator.
+    foldMap :: (Monoid m) => (a -> m) -> Levelorder a -> m
+    foldMap _ (LevelO Nil) = mempty
+    foldMap f (LevelO (Branch l x r)) = foldMap f (nodesList [l, r] [x]) where
+        nodesList [] xs = xs
+        nodesList (Nil : ns) xs = nodesList ns xs
+        nodesList ((Branch l x r) : ns) xs = nodesList (ns ++ [l, r]) (xs ++ [x])
+
+    -- foldMap :: (Monoid m) => (a -> m) -> Levelorder a -> m
+    -- foldMap _ (LevelO Nil) = mempty
+    -- foldMap f (LevelO t) = let (m, _) = thread mempty t in m where
+    --     thread m Nil = (m, ())
+    --     thread m (Branch l x r) = ((f x) <> m2, ()) where
+    --         (m1, _) = thread m l
+    --         (m2, _) = thread m1 r
+
+tree = Branch (Branch Nil 1 (Branch Nil 2 Nil)) 3 (Branch Nil 4 Nil)
+test25 = foldr (:) [] tree -- [1,2,3,4] -- in-order
+test26 = foldr (:) [] $ PreO tree -- [3,1,2,4] -- pre-order
+test27 = foldr (:) [] $ PostO tree -- [2,1,4,3] -- post-order
+test28 = foldr (:) [] $ LevelO tree -- [3,1,4,2] -- BFS or level-order
+
+tagBfs :: (Monoid m) => (a -> m) -> Tree a -> Tree m
+tagBfs f t = let
+    (ms, r) = thread (mempty : ms) t
+        in r where
+            thread ms Nil = (ms, Nil)
+            thread (m : ms) (Branch l x r) =
+                let (ms1, l') = thread ms l
+                    (ms2, r') = thread ms1 r
+                in ((m <> f x) : ms2, Branch l' m r')

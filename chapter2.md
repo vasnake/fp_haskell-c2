@@ -8,7 +8,7 @@
 
 Обобщение сверток: Foldable.
 Traversable: как-бы-свертка но с сохранением структуры.
-Applicative vs Monad: нюансы работы с эффектами, порядок вычислений (направление пайплайна).
+Applicative vs Monad: нюансы работы с эффектами; порядок вычислений (направление пайплайна).
 Applicative-Alternative vs Monad-MonadPlus: свойства моноида-суммы для монад, сравнение с альтернативом (для аппликатива).
 
 ## definitions
@@ -17,6 +17,14 @@ Applicative-Alternative vs Monad-MonadPlus: свойства моноида-су
 - Traversable
 - MonadFail
 - MonadPlus
+
+```hs
+class Foldable t where -- t: однопараметрический конструктор, н-н: список
+    foldr :: (a -> b -> b) -> b -> t a -> b -- foldr f ini [1, 2, 3] = 1 f (2 f (3 f ini))
+    foldl :: (b -> a -> b) -> b -> t a -> b -- foldl f ini [1, 2, 3] = ((ini f 1) f 2) f 3
+
+```
+definitions
 
 ## chapter 2.1, Класс типов Foldable
 
@@ -51,10 +59,12 @@ class Foldable t where
     foldr :: (a -> b -> b) -> b -> t a -> b
     foldl :: (b -> a -> b) -> b -> t a -> b
 -- t это конструктор типов, кайнд * -> *
+
+Minimal complete definition: `foldMap | foldr`
 ```
 repl
 
-### 2.1.3 Foldable `[]`, Maybe, `(,)`
+### 2.1.3 Foldable (`[]`, `Maybe`, `(,)`)
 
 Реализации фолдабл для некоторых типов
 ```hs
@@ -94,13 +104,13 @@ instance Foldable ((,) c) where
 ```
 repl
 
+### 2.1.4 test
+
 ```hs
-https://stepik.org/lesson/30427/step/4?unit=11044
-TODO
 {--
 Сделайте тип
 
-data Triple a = Tr a a a  deriving (Eq,Show)
+data Triple a = Tr a a a  deriving (Eq, Show)
 
 представителем класса типов `Foldable`:
 
@@ -111,7 +121,17 @@ GHCi> foldl (++) "!!" (Tr "ab" "cd" "efg")
 --}
 
 -- solution
-foldr ...
+
+-- data Triple a = Tr a a a  deriving (Eq, Show)
+instance Foldable Triple where
+    -- foldr :: (a -> b -> b) -> b -> Triple a -> b
+    -- foldr f ini (Tr x y z) = f x (f y (f z ini))
+    -- foldr f ini (Tr x y z) = x `f` (y `f` (z `f` ini))
+
+    -- foldMap :: (Monoid m) => (a -> m) -> Triple a -> m
+    foldMap f (Tr x y z) = (f x) `mappend` ((f y) `mappend` (f z))
+    -- Map each element of the structure into a monoid, and combine the results with (<>).
+    -- This fold is right-associative and lazy in the accumulator.
 
 ```
 test
@@ -125,8 +145,8 @@ data Tree a = Nil | Branch (Tree a) a (Tree a) deriving (Eq, Show)
 testTree = Branch (Branch (Branch Nil 1 Nil) 2 (Branch Nil 3 Nil)) 4 (Branch Nil 5 Nil)
 -- in-order: 1 2 3 4 5
 
-instance Foldable Tree where
-    foldr f ini Nil = ini    
+instance Foldable Tree where -- sum-type, pat.mat.
+    foldr f ini Nil = ini -- first case
     -- foldr f ini (Branch l x r) = f x (foldr f iniR l) where iniR = (foldr f ini r) -- pre-order
     foldr f ini (Branch l x r) = foldr f (f x iniR) l  where iniR = (foldr f ini r) -- in-order
 
@@ -141,6 +161,8 @@ ghci> treeToList testTree
 ```
 repl
 
+### 2.1.6 test
+
 ```hs
 https://stepik.org/lesson/30427/step/6?unit=11044
 TODO
@@ -148,7 +170,7 @@ TODO
 Для реализации свертки двоичных деревьев нужно выбрать алгоритм обхода узлов дерева
 https://en.wikipedia.org/wiki/Tree_traversal
 
-Сделайте двоичное дерево
+Сделайте двоичное дерево `Tree`
 
 data Tree a = Nil | Branch (Tree a) a (Tree a) deriving (Eq, Show)
 
@@ -175,6 +197,246 @@ GHCi> foldr (:) [] $ LevelO tree
 --}
 
 -- solution
+https://en.wikipedia.org/wiki/Tree_traversal
+
+-- data Tree a = Nil | Branch (Tree a) a (Tree a) deriving (Eq, Show)
+instance Foldable Tree where
+   foldr f ini Nil = ini
+   foldr f ini (Branch l x r) = foldr f (f x iniR) l  where iniR = (foldr f ini r) -- in-order, LNR
+
+-- newtype Preorder a = PreO (Tree a) deriving (Eq, Show)
+instance Foldable Preorder where
+    -- foldr :: (a -> b -> b) -> b -> Preorder a -> b
+    foldr f ini (PreO Nil) = ini
+    foldr f ini (PreO (Branch l x r)) = f x (foldr f iniR (PreO l)) where iniR = foldr f ini (PreO r) -- pre-order, NLR
+
+-- newtype Postorder a = PostO (Tree a) deriving (Eq, Show)
+instance Foldable Postorder where
+    -- foldr :: (a -> b -> b) -> b -> Postorder a -> b
+    foldr f ini (PostO Nil) = ini
+    foldr f ini (PostO (Branch l x r)) = foldr f foldedRight (PostO l)  where -- post-order, LRN
+        foldedRight = foldr f foldedNode (PostO r) -- RN
+        foldedNode = f x ini
+
+-- newtype Levelorder a = LevelO (Tree a) deriving (Eq, Show)
+instance Foldable Levelorder where
+    -- Map each element of the structure into a monoid, and combine the results with (<>).
+    -- This fold is right-associative and lazy in the accumulator.
+    -- foldMap :: (Monoid m) => (a -> m) -> Levelorder a -> m
+    foldMap _ (LevelO Nil) = mempty
+    foldMap f (LevelO (Branch l x r)) = foldMap f (nodesList [l, r] [x]) where
+        nodesList [] xs = xs
+        nodesList (Nil : ns) xs = nodesList ns xs
+        nodesList ((Branch l x r) : ns) xs = nodesList (ns ++ [l, r]) (xs ++ [x])
+
+-- alternatives
+
+instance Foldable Tree where
+--foldr :: (a -> b -> b) -> b -> t a -> b  
+  foldr f ini Nil = ini
+  foldr f ini (Branch l x r) = foldr f (f x (foldr f ini r)) l 
+  
+
+instance Foldable Preorder where
+  foldr f ini (PreO Nil) = ini
+  foldr f ini (PreO (Branch l x r)) = f x (foldr f (foldr f ini (PreO r)) (PreO l)) 
+
+instance Foldable Postorder where
+  foldr f ini (PostO Nil) = ini
+  foldr f ini (PostO (Branch l x r)) = (\i -> (foldr f i (PostO l))) . (\i -> (foldr f i (PostO r))) . f x $ ini 
+
+instance Foldable Levelorder where
+  foldr f ini (LevelO Nil) = ini
+  foldr f ini (LevelO tr) = foldr f ini vals
+    where
+      vals = concat (levels tr)
+      
+      levels :: Tree a -> [[a]]
+      levels tr = f tr [] where
+        f (Branch l x r) (y:ys) = (x:y) : foldr f ys [l,r]
+        f (Branch l x r) []     = [x]   : foldr f [] [l,r]
+        f (Nil) (y:ys) = (y:ys)
+        f (Nil) []     = []
+
+-----------------------------------------------------------------------------
+
+ii f a c b = f a b c
+
+instance Foldable Tree where
+  foldr _ ini Nil = ini
+  foldr f ini (Branch l x r) =
+    ii foldr f l
+    . f x
+    . ii foldr f r
+    $ ini
+
+instance Foldable Preorder where
+  foldr _ ini (PreO Nil) = ini
+  foldr f ini (PreO (Branch l x r)) =
+    f x
+    . ii foldr f (PreO l)
+    . ii foldr f (PreO r)
+    $ ini
+
+instance Foldable Postorder where
+  foldr _ ini (PostO Nil) = ini
+  foldr f ini (PostO (Branch l x r)) =
+    ii foldr f (PostO l)
+    . ii foldr f (PostO r)
+    . f x
+    $ ini
+
+instance Foldable Levelorder where
+  foldr f ini (LevelO tree) = 
+    let g [] xs = xs
+        g ts xs = g (foldMap branches ts) $ xs ++ foldMap values ts
+
+        branches Nil = []
+        branches (Branch l x r) = [l, r]
+
+        values Nil = []
+        values (Branch _ x _) = [x]
+    in foldr f ini $ g [tree] []
+
+------------------------------------------------------------------------
+
+g :: Foldable t => (a -> b -> b) -> t a -> b -> b
+g = flip . foldr
+
+instance Foldable Tree where
+  foldr f ini (Branch l a r) =
+    g f l $ f a $ g f r ini
+  foldr _ ini _ = ini
+
+instance Foldable Preorder where
+  foldr f ini (PreO (Branch l a r)) =
+    f a $ g f (PreO l) $ g f (PreO r) ini
+  foldr _ ini _ = ini
+
+instance Foldable Postorder where
+  foldr f ini (PostO (Branch l a r)) =
+    g f (PostO l) $ g f (PostO r) $ f a ini
+  foldr _ ini _ = ini
+
+instance Foldable Levelorder where
+  foldr f ini (LevelO tree) =
+    foldr f ini $ flatten [tree]
+
+flatten :: [Tree a] -> [a]
+flatten [] = []
+flatten (Nil : xs) = flatten xs
+flatten ((Branch l a r) : xs) = a : flatten (xs ++ [l, r])
+
+-------------------------------------------------------------------------
+
+instance Foldable Tree where
+    foldr f ini Nil = ini
+    foldr f ini (Branch l x r) = foldr f (f x (foldr f ini r)) l
+
+instance Foldable Preorder where
+    foldr f ini (PreO Nil) = ini
+    foldr f ini (PreO (Branch l x r)) = f x (foldr f (foldr f ini (PreO r)) (PreO l))
+
+instance Foldable Postorder where
+    foldr f ini (PostO Nil) = ini
+    foldr f ini (PostO (Branch l x r)) = foldr f (foldr f (f x ini) (PostO r)) (PostO l)
+
+instance Foldable Levelorder where
+    foldr f ini (LevelO t) = foldl (flip f) ini (snd $ treeToList ([t], []))
+        where
+            treeToList ([], vs) = ([], vs)
+            treeToList (ts, vs) = treeToList (foldr node ([], vs) ts)
+                where
+                    node Nil x = x
+                    node (Branch l x r) (trees, vs') = (r : l : trees, x : vs')
+
+------------------------------------------------------------------------------
+
+instance Foldable Tree where
+    foldr f ini Nil = ini
+    foldr f ini (Branch l x r) = foldr f (f x (foldr f ini r)) l
+    
+instance Foldable Preorder where
+    foldr f ini (PreO Nil) = ini
+    foldr f ini (PreO (Branch l x r)) = f x (foldr f (foldr f ini (PreO r)) (PreO l))
+    
+instance Foldable Postorder where
+    foldr f ini (PostO Nil) = ini
+    foldr f ini (PostO (Branch l x r)) = foldr f (foldr f (f x ini) (PostO r)) (PostO l)
+    
+instance Foldable Levelorder where
+    foldr f ini (LevelO tree) = foldr f ini (rip [tree] []) where
+        rip [] s = s
+        rip (Nil : trees) s = rip trees s
+        rip ((Branch l a r): trees) s = rip (trees ++ [l, r]) (s ++ [a])
+
+---------------------------------------------------------------------------
+
+current Nil = Nothing
+current (Branch l n r) = Just n
+
+
+siblings Nil = []
+siblings (Branch l n r) = [l, r]
+
+instance Foldable Levelorder where
+    foldr f ini (LevelO t) = foldr f ini $ mapMaybe current $ concat $ takeWhile (not . null) $ iterate (concatMap siblings) [t]
+
+-------------------------------------------------------------------------
+
+instance Foldable Levelorder where
+  foldr f ini tree = foldr' (singleton tree) where
+    foldr' seq | null seq  = ini
+    foldr' seq | otherwise = foldr (\v ini -> f v ini) retVal maybeVal where
+      retVal = foldr' seq'
+      (seq', maybeVal) = processNode (1 `drop` seq) (seq `index` 0)
+      processNode seq (LevelO Nil)            = (seq, Nothing)
+      processNode seq (LevelO (Branch r v l)) =  (seq |> (LevelO r) |> (LevelO l), Just v)
+
+-------------------------------------------------------------------------
+
+import Data.Monoid ((<>))
+
+instance Foldable Tree where
+   foldMap f Nil = mempty
+   foldMap f (Branch l x r) = foldMap f l <> f x <> foldMap f r
+   
+instance Foldable Preorder where
+   foldMap f (PreO Nil) = mempty
+   foldMap f (PreO (Branch l x r)) = f x <> foldMap f (PreO l) <> foldMap f (PreO r)
+    
+instance Foldable Postorder where
+   foldMap f (PostO Nil) = mempty
+   foldMap f (PostO (Branch l x r)) = foldMap f (PostO l) <> foldMap f (PostO r) <> f x
+
+instance Foldable Levelorder where
+   foldMap f tree = helper f tree [] where
+      helper f (LevelO Nil) [] = mempty 
+      helper f (LevelO Nil) (q:qs) = helper f q qs
+      helper f (LevelO (Branch l x r)) [] = f x <> helper f (LevelO l) [LevelO r]
+      helper f (LevelO (Branch l x r)) (q:qs) = f x <> helper f q (qs ++ [LevelO l, LevelO r])
+
+----------------------------------------------------------------------------
+
+import           Data.Monoid
+
+foldMapInt::Monoid b=>(b->b->b->b)->(a->b)->Tree a->b
+foldMapInt g f = go where
+  go Nil            = mempty
+  go (Branch l m r) = g (go l) (f m) (go r)
+  
+zipl::Monoid a=>[a]->[a]->[a]
+zipl [] x           = x
+zipl x []           = x
+zipl (x:xs) (y:ys) = x <> y : zipl xs ys 
+
+instance Foldable Tree where foldMap = foldMapInt$ \l m r->l <> m <> r
+instance Foldable Preorder where foldMap = (. \(PreO x) -> x) . foldMapInt (\l m r->m <> l <> r)
+instance Foldable Postorder where foldMap = (. \(PostO x) -> x). foldMapInt (\l m r->l <> r <> m)
+instance Foldable Levelorder where
+  foldMap f (LevelO t) = foldMap id $ go t where
+    go Nil            = []
+    go (Branch l m r) = f m : zipl (go l) (go r)
 
 ```
 test
