@@ -14,14 +14,28 @@ Applicative-Alternative vs Monad-MonadPlus: свойства моноида-су
 ## definitions
 
 - Foldable
+- Endo (monoid)
+- Dual (monoid)
 - Traversable
 - MonadFail
 - MonadPlus
 
 ```hs
-class Foldable t where -- t: однопараметрический конструктор, н-н: список
+class Foldable t where -- MCD (minimal complete definition foldMap | foldr)
+    foldMap :: Monoid m => (a -> m) -> t a -> m -- преобразование каждого `a` в `m` с последующим "суммированием"
     foldr :: (a -> b -> b) -> b -> t a -> b -- foldr f ini [1, 2, 3] = 1 f (2 f (3 f ini))
     foldl :: (b -> a -> b) -> b -> t a -> b -- foldl f ini [1, 2, 3] = ((ini f 1) f 2) f 3
+    fold :: Monoid m => t m -> m -- свертка "списка" моноидов
+
+newtype Endo a -- The monoid of endomorphisms under composition
+instance Monoid (Endo a) where
+    mempty = Endo id
+    mappend (Endo f) (Endo g) = Endo (f . g) -- эф после же
+
+newtype Dual a = Dual { getDual :: a }
+instance (Monoid a) => Monoid (Dual a) where
+    mempty = Dual mempty
+    mappend (Dual x) (Dual y) = Dual (mappend y x) -- n.b. перевернули порядок следования при склейке
 
 ```
 definitions
@@ -164,8 +178,6 @@ repl
 ### 2.1.6 test
 
 ```hs
-https://stepik.org/lesson/30427/step/6?unit=11044
-TODO
 {--
 Для реализации свертки двоичных деревьев нужно выбрать алгоритм обхода узлов дерева
 https://en.wikipedia.org/wiki/Tree_traversal
@@ -197,8 +209,36 @@ GHCi> foldr (:) [] $ LevelO tree
 --}
 
 -- solution
+{--
 https://en.wikipedia.org/wiki/Tree_traversal
+In-order, LNR
+Recursively traverse the current node's left subtree.
+Visit the current node.
+Recursively traverse the current node's right subtree
 
+Pre-order, NLR
+Visit the current node.
+Recursively traverse the current node's left subtree.
+Recursively traverse the current node's right subtree.
+
+Post-order, LRN
+Recursively traverse the current node's left subtree.
+Recursively traverse the current node's right subtree.
+Visit the current node.
+
+flatTree :: Tree a -> [a]
+flatTree Nil = [] 
+flatTree (Branch l x r) = 
+   flatTree l ++ [x] ++ flatTree r  -- In-order
+   [x] ++ flatTree l ++ flatTree r  -- Pre-order
+   flatTree l ++ flatTree r ++ [x]  -- Post-order
+
+           3
+         /   \
+        1     4
+         \
+          2
+--}
 -- data Tree a = Nil | Branch (Tree a) a (Tree a) deriving (Eq, Show)
 instance Foldable Tree where
    foldr f ini Nil = ini
@@ -230,6 +270,55 @@ instance Foldable Levelorder where
         nodesList ((Branch l x r) : ns) xs = nodesList (ns ++ [l, r]) (xs ++ [x])
 
 -- alternatives
+
+import Data.Monoid
+
+instance Foldable Tree where foldMap = foldMapInt (\l m r -> l <> m <> r) -- point-free -- in-order, LNR
+
+instance Foldable Preorder where foldMap = (. \(PreO x) -> x) . foldMapInt (\l m r -> m <> l <> r) -- pre-order, NLR
+
+instance Foldable Postorder where foldMap = (. \(PostO x) -> x). foldMapInt (\l m r -> l <> r <> m) -- post-order, LRN
+
+instance Foldable Levelorder where -- BFS
+  foldMap f (LevelO t) = foldMap id $ go t where
+    go Nil            = []
+    go (Branch l m r) = f m : zipl (go l) (go r) -- monoidal-zip: какова картина: зип двух веток дерева, во голова
+
+-- hidden (in foldMapInt) constraint: Monoid, it's a cheat!
+foldMapInt::Monoid b=> (b->b->b->b) -> (a->b) -> Tree a -> b
+foldMapInt g f = go where
+  go Nil            = mempty -- :: Tree -> b
+  go (Branch l m r) = g (go l) (f m) (go r)
+
+zipl::Monoid a=> [a] -> [a] -> [a]
+zipl [] x           = x
+zipl x []           = x
+zipl (x:xs) (y:ys) = x <> y : (zipl xs ys ) -- monoidal-zip
+
+-------------------------------------------------------------------------
+
+import Data.Monoid ((<>))
+
+instance Foldable Tree where
+   foldMap f Nil = mempty
+   foldMap f (Branch l x r) = (foldMap f l) <> (f x) <> (foldMap f r)
+
+instance Foldable Preorder where
+   foldMap f (PreO Nil) = mempty
+   foldMap f (PreO (Branch l x r)) = (f x) <> (foldMap f (PreO l)) <> (foldMap f (PreO r))
+
+instance Foldable Postorder where
+   foldMap f (PostO Nil) = mempty
+   foldMap f (PostO (Branch l x r)) = (foldMap f (PostO l)) <> (foldMap f (PostO r)) <> (f x)
+
+instance Foldable Levelorder where
+   foldMap f tree = helper f tree [] where
+      helper f (LevelO Nil) [] = mempty 
+      helper f (LevelO Nil) (q:qs) = helper f q qs
+      helper f (LevelO (Branch l x r)) [] = (f x) <> (helper f (LevelO l) [LevelO r])
+      helper f (LevelO (Branch l x r)) (q:qs) = (f x) <> (helper f q (qs ++ [LevelO l, LevelO r]))
+
+------------------------------------------------------------------------
 
 instance Foldable Tree where
 --foldr :: (a -> b -> b) -> b -> t a -> b  
@@ -375,7 +464,6 @@ instance Foldable Levelorder where
 current Nil = Nothing
 current (Branch l n r) = Just n
 
-
 siblings Nil = []
 siblings (Branch l n r) = [l, r]
 
@@ -393,57 +481,13 @@ instance Foldable Levelorder where
       processNode seq (LevelO Nil)            = (seq, Nothing)
       processNode seq (LevelO (Branch r v l)) =  (seq |> (LevelO r) |> (LevelO l), Just v)
 
--------------------------------------------------------------------------
-
-import Data.Monoid ((<>))
-
-instance Foldable Tree where
-   foldMap f Nil = mempty
-   foldMap f (Branch l x r) = foldMap f l <> f x <> foldMap f r
-   
-instance Foldable Preorder where
-   foldMap f (PreO Nil) = mempty
-   foldMap f (PreO (Branch l x r)) = f x <> foldMap f (PreO l) <> foldMap f (PreO r)
-    
-instance Foldable Postorder where
-   foldMap f (PostO Nil) = mempty
-   foldMap f (PostO (Branch l x r)) = foldMap f (PostO l) <> foldMap f (PostO r) <> f x
-
-instance Foldable Levelorder where
-   foldMap f tree = helper f tree [] where
-      helper f (LevelO Nil) [] = mempty 
-      helper f (LevelO Nil) (q:qs) = helper f q qs
-      helper f (LevelO (Branch l x r)) [] = f x <> helper f (LevelO l) [LevelO r]
-      helper f (LevelO (Branch l x r)) (q:qs) = f x <> helper f q (qs ++ [LevelO l, LevelO r])
-
-----------------------------------------------------------------------------
-
-import           Data.Monoid
-
-foldMapInt::Monoid b=>(b->b->b->b)->(a->b)->Tree a->b
-foldMapInt g f = go where
-  go Nil            = mempty
-  go (Branch l m r) = g (go l) (f m) (go r)
-  
-zipl::Monoid a=>[a]->[a]->[a]
-zipl [] x           = x
-zipl x []           = x
-zipl (x:xs) (y:ys) = x <> y : zipl xs ys 
-
-instance Foldable Tree where foldMap = foldMapInt$ \l m r->l <> m <> r
-instance Foldable Preorder where foldMap = (. \(PreO x) -> x) . foldMapInt (\l m r->m <> l <> r)
-instance Foldable Postorder where foldMap = (. \(PostO x) -> x). foldMapInt (\l m r->l <> r <> m)
-instance Foldable Levelorder where
-  foldMap f (LevelO t) = foldMap id $ go t where
-    go Nil            = []
-    go (Branch l m r) = f m : zipl (go l) (go r)
 
 ```
 test
 
 ### 2.1.7 Foldable (fold, foldMap)
 
-У Foldable есть (кроме фолдл, фолдр) другие функции.
+У Foldable есть (кроме foldl, foldr) другие функции.
 Некоторые требуют чтобы значения были в моноиде.
 ```hs
 class Foldable t where
@@ -453,11 +497,11 @@ class Foldable t where
 -- функции требующие от значения быть в моноиде:
 
     fold :: Monoid m => t m -> m -- свертка "списка" моноидов
-    fold = foldr mappend mempty -- mconcat
+    fold = foldr mappend mempty -- mconcat фактически
 
-    foldMap :: Monoid m => (a -> m) -> t a -> m -- преобразование каждого а в эм с последующим суммированием
+    foldMap :: Monoid m => (a -> m) -> t a -> m -- преобразование каждого `a` в `m` с последующим суммированием
     -- foldMap f ta = let tm = fmap f ta in fold tm -- увы, так нельзя, тип t не заявлен как Functor, у него нет fmap
-    foldMap f ta = foldr (mappend . f) mempty ta
+    foldMap f ta = foldr (mappend . f) mempty ta -- дефолтная реализация через `foldr`
     foldMap f = foldr (mappend . f) mempty -- pointfree
 -- mappend . f -- дает нам нужную для foldr функцию двух аргументов
 
@@ -484,9 +528,9 @@ Product {getProduct = 120} -- 5!
 ```
 repl
 
+### 2.1.8 test
+
 ```hs
-https://stepik.org/lesson/30427/step/8?unit=11044
-TODO
 {--
 Предположим, что определены следующие функции
 
@@ -500,9 +544,32 @@ h = Just . getAll . foldMap All . map isDigit
 f [3,5,6] = ?
 h [3,5,6] = ?
 g [Just True,Just False,Nothing] = ?
+
+Just True, Just False, error ...
 --}
 
--- solution
+-- solution: поведение моноидов Any, Last, All
+
+ghci> f [3,5,6]
+Just True
+-- f = Just . getAny . (foldMap Any) . (fmap even)
+fmap even -- из списка чисел даст список бул [Fase, False, True]
+foldMap Any -- из списка сделает моноид-обертку бул (mappend False True = True)
+-- ghci> Any False `mappend` Any True
+-- Any {getAny = True}
+getAny -- развернет обертку в бул значение True
+Just -- завернет бул в мэйби
+
+ghci> h [3,5,6]
+<interactive>:4:4: error:     • No instance for (Num Char) arising from the literal ‘3’
+-- h = Just . getAll . (foldMap All) . (map isDigit)
+map isDigit -- сломается сразу, числа не символы
+
+ghci> g [Just True,Just False,Nothing]
+Just False
+-- g = getLast . (foldMap Last)
+foldMap Last -- из списка мэйби сделает одно значение, `Maybe monoid returning the rightmost non-Nothing value`: Just False
+getLast -- развернет обертку Last: Just False
 
 ```
 test
@@ -515,21 +582,21 @@ class Foldable t where
     foldr :: (a -> b -> b) -> b -> t a -> b
     foldl :: (b -> a -> b) -> b -> t a -> b
     fold :: Monoid m => t m -> m -- свертка "списка" моноидов
-    foldMap :: Monoid m => (a -> m) -> t a -> m -- преобразование каждого а в эм с последующим суммированием
+    foldMap :: Monoid m => (a -> m) -> t a -> m -- преобразование каждого `a` в `m` с последующим "суммированием"
 
 -- другие полезные функции
 
     sum :: Num a => t a -> a
-    sum = getSum . foldMap Sum
+    sum = getSum . foldMap Sum -- с использованием моноида
 
     product :: Num a => t a -> a
-    product = getProduct . foldMap Product
+    product = getProduct . foldMap Product -- моноид продукта
 
     null :: t a -> Bool
-    null = foldr (\ _ _ -> False) True -- лямбда сработает на первом же элементе и даст не-нулл
+    null = foldr (\ _ _ -> False) True -- трюк: лямбда сработает на первом же элементе и даст не-нулл
 
     toList :: t a -> [a]
-    toList = foldr (:) []
+    toList = foldr (:) [] -- протаскивание конструктора по элементам
 
     length :: t a -> Int
     length = _ -- строгая версия левой свертки
@@ -547,9 +614,9 @@ ghci> maximum [] -- не тотальная функция
 ```
 repl
 
+### 2.1.10 test
+
 ```hs
-https://stepik.org/lesson/30427/step/10?unit=11044
-TODO
 {--
 Предположим, что у нас реализованы все свертки, 
 основанные на разных стратегиях обхода дерева из предыдущей задачи. 
@@ -565,12 +632,31 @@ Select one option from the list
 -- solution
 -- что если: дерево бесконечно, пусто, не пусто но без значений, ...?
 
+-- функия возвращает True при наличии элемента в фолдабле
+ghci> :i elem
+class Foldable t where
+  elem :: Eq a => a -> t a -> Bool -- Defined in ‘Data.Foldable’
+-- сделано через any, виснет на бесконечности
+any :: Foldable t => (a -> Bool) -> t a -> Bool
+
+-- т.е. вопрос можно переформулировать так: на каком дереве перебор не зависнет?
+-- ответ:
+elem 42 $ LevelO someTree
+-- по факту, методом исключения: все остальные используют одинаковые стратегии вычислений, а выбрать надо один элемент
+-- я вижу только одну разницу: три стратегии используют рекурсию и (на бесконечности) выжирают память,
+-- одна стратегия может быть сделана с TCO и память не жрать.
+-- Что не отменяет факта зависания программы.
+
+-- можно методом тыка
+GHCi> infiniteTree n = Branch (infiniteTree $ n + 1) n (Branch Leaf 42 Leaf)
+GHCi> someTree = infiniteTree 100
+
 ```
 test
 
 ### 2.1.11 Foldable (foldr', foldr1, and, or, any, all, concat, concatMap)
 
-Продолжим смотрить на предоставляемые фолдаблом функции
+Продолжим смотреть на предоставляемые фолдаблом функции
 ```hs
 class Foldable t where
     foldr :: (a -> b -> b) -> b -> t a -> b
@@ -583,6 +669,7 @@ class Foldable t where
     null :: t a -> Bool
     toList :: t a -> [a]
     length :: t a -> Int
+
     maximum
     minimum
     elem
@@ -608,17 +695,17 @@ repl
 
 ### 2.1.12 Endo - эндоморфизм aka `a -> a`
 
-Хотим реализацию foldr через foldMap, ибо `MCD: foldMap | foldr`
+Хотим реализацию `foldr` через `foldMap`, ибо `MCD: foldMap | foldr`
 а реализацию foldMap через foldr мы уже видели.
-
 foldl реализуется через foldMap, кстати.
 
+Для этого надо ...
 Предварительно необходимо понять "эндоморфизм".
 Эндоморфизм это стрелка из сета в этот же сет.
 Область определений и область значений функции совпадают.
 Это стрелка из А в А. (инт в инт, строка в строку, ...).
 
-На типе Endo можно сделать моноид на операции "композиция": композиция функций, mappend aka `<>`.
+На типе `Endo` можно сделать моноид на операции "композиция": композиция функций как mappend aka `<>`.
 ```hs
 -- Data.Monoid.Endo
 newtype Endo a = Endo { appEndo :: a -> a }
@@ -652,15 +739,16 @@ ghci> appEndo (Endo (+2) <> Endo (+3) <> Endo(+4)) 1
 ```
 repl
 
+### 2.1.13 test
+
 ```hs
-https://stepik.org/lesson/30427/step/13?unit=11044
-TODO
 {--
 Реализуйте функцию
 
 mkEndo :: Foldable t => t (a -> a) -> Endo a
 
-принимающую контейнер функций и последовательно сцепляющую элементы этого контейнера с помощью композиции,
+принимающую контейнер функций и 
+последовательно сцепляющую элементы этого контейнера с помощью композиции,
 порождая в итоге эндоморфизм.
 
 GHCi> e1 = mkEndo [(+5),(*3),(^2)]
@@ -675,22 +763,34 @@ mkEndo = undefined
 
 -- solution
 
+import Data.Monoid ( Endo(..) )
+mkEndo :: Foldable t => t (a -> a) -> Endo a
+mkEndo = foldMap Endo -- делаем моноид и композим (маппенд), при этом право-ассоциативно
+
 ```
 test
 
 ### 2.1.14 реализация foldr через foldMap
 
-фолдмэп реализован через фолдр, фолдр реализован через фолдмэп.
+foldMap реализован через foldr, foldr реализован через foldMap.
 Достаточно предоставить свою реализацию любой из этих ф. чтобы сделать свой фолдабл.
 
-Используем эндоморфизм для реализации foldr через foldMap
+Используем эндоморфизм для реализации foldr через foldMap:
+заворачиваем элементы фолдабла в моноид-стрелку, потом композим.
 ```hs
 class Foldable t where
     foldMap :: Monoid m => (a -> m) -> t a -> m -- преобразование каждого а в эм с последующим суммированием
     foldMap f = foldr (mappend . f) mempty
 
     foldr :: (a -> b -> b) -> b -> t a -> b
-    foldr f ini ta = appEndo (foldMap (Endo . f) ta) ini
+    foldr f ini ta = appEndo composedFunc ini where
+        -- задача: нужен моноид для foldMap, это `Endo . f`
+        composedFunc = foldMap (Endo . f) ta -- конструктор энду после эф, отправленный в фолд:
+        -- завернет вычисление каждого элемента в функцию завернутую в энду, и сделает композицию этих функций (вложенные врапперы)
+        -- грубо: превращает список элементов в список частично примененных функций, которые можно композить моноидально
+
+-- Моноид, который нужен в foldMap: это энду, который просто стрелка.
+-- Каждый элемент фолдабла завернут в стрелку.
 
 ghci> :t Endo
 Endo :: (a -> a) -> Endo a
@@ -701,8 +801,8 @@ appEndo :: Endo a -> a -> a
 -- разбор устройства foldr-using-foldMap
 
 ini :: b
-f :: a -> (b -> b) -- для удобства рассуждений, f берет а и возвращает эндоморфизм
-(Endo . f) :: a -> Endo b -- а эта композиция выглядит как аргумент для foldMap: (a -> m)
+f :: a -> (b -> b) -- для удобства рассуждений, `f` берет `a` и возвращает эндоморфизм
+(Endo . f) :: a -> Endo b -- эта композиция выглядит как аргумент для foldMap: (a -> m)
 foldMap (Endo . f) ta :: Endo b -- остается только подставить аргумент типа бэ и ... готово
 -- по типам все подходит как надо, ок.
 
@@ -727,7 +827,7 @@ foldr f ini [1,2,3]
 ```
 repl
 
-### 2.1.15 реализация foldl через foldMap
+### 2.1.15 реализация foldl через foldMap (Dual)
 
 Чтобы сделать это, нам понадобится моноид `Dual`, сделанный как модификация любого моноида,
 с перевернутым порядком `mappend`.
@@ -767,7 +867,7 @@ class Foldable t where
     foldr f ini ta = appEndo (foldMap (Endo . f) ta) ini
 
     foldl :: (b -> a -> b) -> b -> t a -> b
-    foldl f ini ta = appEndo (getDual (foldMap (Dual . Endo . (flip f)) ta)) ini
+    foldl f ini ta = appEndo (getDual (foldMap (Dual . Endo . (flip f)) ta)) ini -- как и foldr только дуально-флипнутый
 
 ghci> :t Endo
 Endo :: (a -> a) -> Endo a
@@ -780,6 +880,8 @@ flip f :: a -> b -> b -- где (b -> b) это эндоморфизм
 -- остальное вполне очевидно, с учетом уже сделанного разбора foldr
 ```
 repl
+
+### 2.1.16 test
 
 ```hs
 https://stepik.org/lesson/30427/step/16?unit=11044

@@ -15,15 +15,18 @@
 {-# HLINT ignore "Use print" #-}
 {-# HLINT ignore "Redundant bracket" #-}
 {-# HLINT ignore "Move brackets to avoid $" #-}
+{-# HLINT ignore "Fuse foldMap/fmap" #-}
+{-# HLINT ignore "Fuse foldMap/map" #-}
 
 module TestEffects where
 
 import Text.Parsec (getParserState)
-import Data.Char (toLower)
-import Data.Function ( (&) )
+import Data.Char ( toLower, isDigit, )
+import Data.Function ( (&), )
 
 import Data.Monoid (
-    Sum(..), Product(..), Endo(..), appEndo, (<>), Dual(..), First(..)
+    Sum(..), Product(..), Endo(..), appEndo, (<>), Dual(..), First(..),
+    getAny, Any(..), getLast, Last(..), getAll, All(..),
     )
 
 -- import Control.Monad.Identity ( Identity(..) )
@@ -48,10 +51,11 @@ import Control.Monad ( liftM, mplus, guard, mfilter )
 -- import GHC.Show (Show)
 -- import GHC.Base (Eq)
 import Prelude (
-    show, read, String, Char, Functor(..), fmap, Bool, otherwise, Int,
+    show, read, String, Char, Functor(..), fmap, otherwise, Int,
     (==), (*), id, const, Maybe(..), null, ($), succ, (.), undefined, Num(..), Show, Eq,
     foldr, foldl, Either(..), Monoid(..), Semigroup(..), putStrLn, print, (*), (>), (/), (^),
-    map, (=<<), (>>=), return, flip, (++), fail, Ord(..), (>>), take
+    map, (=<<), (>>=), return, flip, (++), fail, Ord(..), (>>), take,
+    even, Bool(..),
     )
 
 test = foldr (+) 0 [0..42]
@@ -233,15 +237,14 @@ Recursively traverse the current node's left subtree.
 Recursively traverse the current node's right subtree.
 Visit the current node.
 
-Через рекурсию порядки обхода дерева описываются просто:
-
 flatTree :: Tree a -> [a]
 flatTree Nil = [] 
 flatTree (Branch l x r) = 
    flatTree l ++ [x] ++ flatTree r  -- In-order
    [x] ++ flatTree l ++ flatTree r  -- Pre-order
    flatTree l ++ flatTree r ++ [x]  -- Post-order
-Далее принцип такой -- самое правое слагаемое идёт как ini в очередной foldr
+
+самое правое слагаемое идёт как ini в очередной foldr
 
            3
          /   \
@@ -303,3 +306,80 @@ tagBfs f t = let
                 let (ms1, l') = thread ms l
                     (ms2, r') = thread ms1 r
                 in ((m <> f x) : ms2, Branch l' m r')
+
+
+-- f :: [Int] -> Maybe Bool
+-- f = Just . getAny . foldMap Any . fmap even
+
+-- g :: [Maybe a] -> Maybe a
+-- g = getLast . foldMap Last
+
+-- h :: [Int] -> Maybe Bool
+-- h = Just . getAll . foldMap All . map isDigit
+
+infiniteTree n = Branch (infiniteTree $ n + 1) n (Branch Nil 42 Nil)
+-- test29 = elem 42 $ LevelO (infiniteTree 100)
+
+
+{--
+Реализуйте функцию
+
+mkEndo :: Foldable t => t (a -> a) -> Endo a
+
+принимающую контейнер функций и 
+последовательно сцепляющую элементы этого контейнера с помощью композиции,
+порождая в итоге эндоморфизм.
+
+GHCi> e1 = mkEndo [(+5),(*3),(^2)]
+GHCi> appEndo e1 2
+17
+GHCi> e2 = mkEndo (42,(*3))
+GHCi> appEndo e2 2
+6
+--}
+mkEndo :: Foldable t => t (a -> a) -> Endo a
+mkEndo = foldMap Endo
+
+e1 = mkEndo [(+5),(*3),(^2)]
+test30 = appEndo e1 2 -- 17
+e2 = mkEndo (42,(*3))
+test31 = appEndo e2 2 -- 6
+
+
+{--
+Сделайте тип
+
+infixr 9 |.|
+newtype (|.|) f g a = Cmps { getCmps :: f (g a) }  deriving (Eq,Show) 
+
+представителем класса типов `Foldable` при условии, 
+что аргументы композиции являются представителями `Foldable`.
+
+GHCi> maximum $ Cmps [Nothing, Just 2, Just 3]
+3
+GHCi> length $ Cmps [[1,2], [], [3,4,5,6,7]]
+7
+
+ghci> :t Cmps
+Cmps
+     f (g a) -> (|.|) f g a
+ghci> :t getCmps
+getCmps
+     (|.|) f g a -> f (g a)
+
+--}
+
+infixr 9 |.|
+newtype (|.|) f g a = Cmps { getCmps :: f (g a) }  deriving (Eq,Show) 
+
+instance (Foldable f, Foldable g) => Foldable ((|.|) f g) where
+    -- Map each element of the structure into a monoid, and combine the results with (<>).
+    -- This fold is right-associative and lazy in the accumulator.
+    foldMap :: (Monoid m) => (a -> m) -> (|.|) f g a -> m
+    foldMap getMonoidFunc cmps = undefined
+
+    foldr :: (a -> b -> b) -> b -> (|.|) f g a -> b
+    foldr combineElemsFunc ini cmps = undefined
+
+test32 = maximum $ Cmps [Nothing, Just 2, Just 3] -- 3
+test33 = length $ Cmps [[1,2], [], [3,4,5,6,7]] -- 7
