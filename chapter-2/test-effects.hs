@@ -373,13 +373,14 @@ infixr 9 |.|
 newtype (|.|) f g a = Cmps { getCmps :: f (g a) }  deriving (Eq,Show) 
 
 instance (Foldable f, Foldable g) => Foldable ((|.|) f g) where
-    -- Map each element of the structure into a monoid, and combine the results with (<>).
+    -- Map each element of the structure into a monoid, and combine the results with (mappend <>).
     -- This fold is right-associative and lazy in the accumulator.
     foldMap :: (Monoid m) => (a -> m) -> (|.|) f g a -> m
-    foldMap getMonoidFunc cmps = undefined
+    foldMap f cmps = foldMap (foldMap f) fga where -- два барьера, два фолдмэпа
+        fga = getCmps cmps
 
-    foldr :: (a -> b -> b) -> b -> (|.|) f g a -> b
-    foldr combineElemsFunc ini cmps = undefined
+    -- foldr :: (a -> b -> b) -> b -> (|.|) f g a -> b
+    -- foldr f ini cmps = undefined
 
 test32 = maximum $ Cmps [Nothing, Just 2, Just 3] -- 3
 test33 = length $ Cmps [[1,2], [], [3,4,5,6,7]] -- 7
