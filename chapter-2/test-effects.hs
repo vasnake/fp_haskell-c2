@@ -17,6 +17,7 @@
 {-# HLINT ignore "Move brackets to avoid $" #-}
 {-# HLINT ignore "Fuse foldMap/fmap" #-}
 {-# HLINT ignore "Fuse foldMap/map" #-}
+{-# HLINT ignore "Use <$>" #-}
 
 module TestEffects where
 
@@ -55,7 +56,7 @@ import Prelude (
     (==), (*), id, const, Maybe(..), null, ($), succ, (.), undefined, Num(..), Show, Eq,
     foldr, foldl, Either(..), Monoid(..), Semigroup(..), putStrLn, print, (*), (>), (/), (^),
     map, (=<<), (>>=), return, flip, (++), fail, Ord(..), (>>), take,
-    even, Bool(..),
+    even, Bool(..), odd,
     )
 
 test = foldr (+) 0 [0..42]
@@ -124,18 +125,18 @@ instance Traversable (Const c) where
 
 test17 = Const 'z'
 
-data Result a = Error | Ok a deriving (Eq, Show) -- sum-type, Maybe isomorph
-instance Functor Result where fmap = fmapDefault -- используя траверс
-instance Foldable Result where foldMap = foldMapDefault -- используя траверс
+data ResultL a = ErrorL | OkL a deriving (Eq, Show) -- sum-type, Maybe isomorph
+instance Functor ResultL where fmap = fmapDefault -- используя траверс
+instance Foldable ResultL where foldMap = foldMapDefault -- используя траверс
 
-instance Traversable Result where
+instance Traversable ResultL where
 -- instance (Functor Result, Foldable Result) => Traversable Result where
     -- traverse :: (Applicative f) => (a -> f b) -> Result a -> f (Result b)
-    traverse _ Error = pure Error
+    traverse _ ErrorL = pure ErrorL
     -- traverse f (Ok x) = (pure Ok) <*> (f x)
-    traverse f (Ok x) = Ok <$> f x
+    traverse f (OkL x) = OkL <$> f x
 
-test18 = traverse (\x -> [x+10, x+20]) (Ok 5)
+test18 = traverse (\x -> [x+10, x+20]) (OkL 5)
 
 (<***>) :: Applicative f => f a -> f (a -> b) -> f b
 (<***>) = flip (<*>)
@@ -384,3 +385,190 @@ instance (Foldable f, Foldable g) => Foldable ((|.|) f g) where
 
 test32 = maximum $ Cmps [Nothing, Just 2, Just 3] -- 3
 test33 = length $ Cmps [[1,2], [], [3,4,5,6,7]] -- 7
+
+
+{--
+Реализуйте функцию
+
+traverse2list :: (Foldable t, Applicative f) => (a -> f b) -> t a -> f [b]
+
+работающую с эффектами как `traverse_`
+но параллельно с накоплением эффектов 
+«восстанавливающую» сворачиваемую структуру в виде списка:
+
+GHCi> traverse2list (\x -> [x+10,x+20]) [1,2,3]
+[[11,12,13],[11,12,23],[11,22,13],[11,22,23],[21,12,13],[21,12,23],[21,22,13],[21,22,23]]
+GHCi> traverse2list (\x -> [x+10,x+20]) $ Branch (Branch Nil 1 Nil) 2 (Branch Nil 3 Nil)
+[[12,11,13],[12,11,23],[12,21,13],[12,21,23],[22,11,13],[22,11,23],[22,21,13],[22,21,23]]
+--}
+traverse2list :: (Foldable t, Applicative f) => (a -> f b) -> t a -> f [b]
+traverse2list f = foldr (\ x y -> pure (:) <*> (f x) <*> y) (pure [])
+-- все наши сиквенсы и траверсы сделаны через foldr, поэтому функция свертки формирует список,
+-- комбинируя аппликативы через `apply over`
+
+-- traverse_ :: (Foldable t, Applicative f) => (a -> f b) -> t a -> f ()
+-- traverse_ f = foldr ((*>) . f) (pure ())
+
+-- sequenceA2list :: (Foldable t, Applicative f) => t (f a) -> f [a]
+-- sequenceA2list = foldr (\ x y -> pure (:) <*> x <*> y) (pure [])
+
+-- sequenceA_ :: (Foldable t, Applicative f) => t (f a) -> f ()
+-- sequenceA_ = foldr (*>) (pure ())
+
+test34 = traverse2list (\x -> [x+10,x+20]) [1,2,3] -- [[11,12,13],[11,12,23],[11,22,13],[11,22,23],[21,12,13],[21,12,23],[21,22,13],[21,22,23]]
+test35 = traverse2list (\x -> [x+10,x+20]) $ Branch (Branch Nil 1 Nil) 2 (Branch Nil 3 Nil) -- [[12,11,13],[12,11,23],[12,21,13],[12,21,23],[22,11,13],[22,11,23],[22,21,13],[22,21,23]]
+
+
+{--
+Сделайте тип `Triple`
+
+data Triple a = Tr a a a  deriving (Eq,Show)
+
+представителем класса типов `Traversable`
+
+GHCi> foldl (++) "!!" (Tr "ab" "cd" "efg")
+"!!abcdefg"
+GHCi> traverse (\x -> if x>10 then Right x else Left x) (Tr 12 14 16)
+Right (Tr 12 14 16)
+GHCi> traverse (\x -> if x>10 then Right x else Left x) (Tr 12 8 4)
+Left 8
+GHCi> sequenceA (Tr (Tr 1 2 3) (Tr 4 5 6) (Tr 7 8 9))
+Tr (Tr 1 4 7) (Tr 2 5 8) (Tr 3 6 9)
+--}
+
+-- data Triple a = Tr a a a  deriving (Eq,Show)
+instance Traversable Triple where
+    traverse :: (Applicative f)=> (a -> f b) -> (Triple a) -> f (Triple b)
+    traverse f (Tr x y z) = Tr <$> (f x) <*> (f y) <*> (f z) -- см. функтор, плюс протаскивание конструктора в аппликатив
+
+instance Functor Triple where
+    fmap :: (a -> b) -> Triple a -> Triple b
+    fmap f (Tr x y z) = Tr (f x) (f y) (f z)
+
+instance Applicative Triple where
+    pure :: a -> Triple a
+    pure x = Tr x x x
+    (<*>) :: Triple (a -> b) -> Triple a -> Triple b
+    (Tr fx fy fz) <*> (Tr x y z) = Tr (fx x) (fy y) (fz z)
+{--
+
+instance Foldable Triple where
+    foldMap f (Tr x y z) = (f x) `mappend` ((f y) `mappend` (f z))
+--}
+test36 = foldl (++) "!!" (Tr "ab" "cd" "efg") -- "!!abcdefg"
+test37 = traverse (\x -> if x>10 then Right x else Left x) (Tr 12 14 16) -- Right (Tr 12 14 16)
+test38 = traverse (\x -> if x>10 then Right x else Left x) (Tr 12 8 4) -- Left 8
+test39 = sequenceA (Tr (Tr 1 2 3) (Tr 4 5 6) (Tr 7 8 9)) -- Tr (Tr 1 4 7) (Tr 2 5 8) (Tr 3 6 9)
+
+
+{--
+Сделайте тип данных `Result`
+
+data Result a = Ok a | Error String deriving (Eq, Show)
+
+представителем класса типов `Traversable` (и всех других необходимых классов типов).
+
+GHCi> traverse (\x->[x+2,x-2]) (Ok 5)
+[Ok 7,Ok 3]
+GHCi> traverse (\x->[x+2,x-2]) (Error "!!!")
+[Error "!!!"]
+--}
+
+data Result a = Ok a | Error String
+    deriving (Eq, Show)
+
+instance Functor Result where
+    fmap :: (a -> b) -> Result a -> Result b
+    fmap _ (Error s) = Error s
+    fmap f (Ok x) = Ok $ f x
+
+instance Applicative Result where
+    pure :: a -> Result a
+    pure = Ok
+    (<*>) :: Result (a -> b) -> Result a -> Result b
+    (Ok f) <*> (Ok x) = Ok $ f x
+    (Error s) <*> _ = Error s -- ошибки можно склеивать, не надо?
+    _ <*> (Error s) = Error s
+
+instance Foldable Result where
+    foldMap :: Monoid m => (a -> m) -> Result a -> m
+    foldMap _ (Error s) = mempty
+    foldMap f (Ok x) = f x
+
+instance Traversable Result where
+    traverse :: Applicative f => (a -> f b) -> Result a -> f (Result b)
+    traverse f (Error s) = pure $ Error s
+    traverse f (Ok x) = Ok <$> f x
+
+test40 = traverse (\x->[x+2,x-2]) (Ok 5) -- [Ok 7,Ok 3]
+test41 = traverse (\x->[x+2,x-2]) (Error "!!!") -- [Error "!!!"]
+
+
+{--
+Сделайте двоичное дерево
+
+data Tree a = Nil | Branch (Tree a) a (Tree a)  deriving (Eq, Show)
+
+представителем класса типов `Traversable` (а также всех других необходимых классов типов).
+
+GHCi> traverse (\x -> if odd x then Right x else Left x) (Branch (Branch Nil 1 Nil) 3 Nil)
+Right (Branch (Branch Nil 1 Nil) 3 Nil)
+GHCi> traverse (\x -> if odd x then Right x else Left x) (Branch (Branch Nil 1 Nil) 2 Nil)
+Left 2
+GHCi> sequenceA $ Branch (Branch Nil [1,2] Nil) [3] Nil
+[Branch (Branch Nil 1 Nil) 3 Nil,Branch (Branch Nil 2 Nil) 3 Nil]
+--}
+
+-- data Tree a = Nil | Branch (Tree a) a (Tree a)  deriving (Eq, Show)
+instance Traversable Tree where
+    sequenceA :: (Applicative f)=> Tree (f a) -> f (Tree a)
+    sequenceA Nil = pure Nil
+    sequenceA (Branch l m r) = Branch <$> (sequenceA l) <*> m <*> (sequenceA r)
+
+{--
+instance Functor Tree where
+    fmap f Nil = Nil
+    fmap f (Branch l x r) = Branch (fmap f l) (f x) (fmap f r)
+
+instance Foldable Tree where
+    foldr f ini Nil = ini
+    -- foldr f ini (Branch l x r) = f x (foldr f iniR l) where iniR = foldr f ini r -- pre-order
+    foldr f ini (Branch l x r) = foldr f (f x iniR) l  where iniR = (foldr f ini r) -- in-order
+--}
+test42 = traverse (\x -> if odd x then Right x else Left x) (Branch (Branch Nil 1 Nil) 3 Nil) -- Right (Branch (Branch Nil 1 Nil) 3 Nil)
+test43 = traverse (\x -> if odd x then Right x else Left x) (Branch (Branch Nil 1 Nil) 2 Nil) -- Left 2
+test44 = sequenceA $ Branch (Branch Nil [1,2] Nil) [3] Nil -- [Branch (Branch Nil 1 Nil) 3 Nil,Branch (Branch Nil 2 Nil) 3 Nil]
+
+
+{--
+Сделайте тип `Cmps`
+
+infixr 9 |.|
+newtype (|.|) f g a = Cmps { getCmps :: f (g a) }  deriving (Eq,Show) 
+
+представителем класса типов `Traversable` при условии, 
+что аргументы композиции являются представителями `Traversable`
+
+GHCi> sequenceA (Cmps [Just (Right 2), Nothing])
+Right (Cmps {getCmps = [Just 2,Nothing]})
+GHCi> sequenceA (Cmps [Just (Left 2), Nothing])
+Left 2
+--}
+-- infixr 9 |.|
+-- newtype (|.|) f g a = Cmps { getCmps :: f (g a) }  deriving (Eq,Show)
+instance (Traversable a, Traversable b)=> Traversable (a |.| b) where
+    -- traverse :: (Applicative f) => (x -> f y) -> (|.|) a b x -> f ((|.|) a b y)
+    traverse f (Cmps x) = Cmps <$> traverse (traverse f) x -- протащить через два барьера
+
+instance (Functor f, Functor g)=> Functor (f |.| g) where
+    -- fmap :: (a -> b) -> (f |.| g) a -> (f |.| g) b
+    fmap h (Cmps x) = Cmps $ fmap (fmap h) x
+
+{--
+instance (Foldable a, Foldable b) => Foldable (a |.| b) where
+    foldMap = (. getCmps) . foldMap . foldMap
+
+--}
+
+test45 = sequenceA (Cmps [Just (Right 2), Nothing]) -- Right (Cmps {getCmps = [Just 2,Nothing]})
+test46 = sequenceA (Cmps [Just (Left 2), Nothing]) -- Left 2

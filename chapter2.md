@@ -37,6 +37,28 @@ instance (Monoid a) => Monoid (Dual a) where
     mempty = Dual mempty
     mappend (Dual x) (Dual y) = Dual (mappend y x) -- n.b. перевернули порядок следования при склейке
 
+fold :: (Foldable t, Monoid m) => t m -> m -- свертка "списка" моноидов
+fold = foldr mappend mempty
+
+asum :: (Foldable t, Alternative f) => t (f a) -> f a -- аппликативный функтор с моноидальной структурой: альтернатив
+asum = foldr (<|>) empty -- fold для альтернатива (сворачивается контекст, не значения)
+
+sequenceA_ :: (Foldable t, Applicative f) => t (f a) -> f ()
+sequenceA_ = foldr (*>) (pure ()) -- фолд эффектов аппликатива
+
+-- fold vs foldMap, sequenceA_ vs traverse_
+foldMap :: (Foldable t, Monoid m) => (a -> m) -> t a -> m
+foldMap f = foldr (mappend . f) mempty
+
+traverse_ :: (Foldable t, Applicative f) => (a -> f b) -> t a -> f ()
+traverse_ f = foldr ((*>) . f) (pure ())
+
+class (Functor t, Foldable t) => Traversable t where -- glorified functor -- Minimal Complete Definition `traverse | sequenceA`
+    sequenceA :: Applicative f => t (f a) -> f (t a) -- "список" аппликативов преобразовать в аппликатив "списка"
+    sequenceA = traverse id
+    traverse :: Applicative f => (a -> f b) -> t a -> f (t b)
+    traverse = sequenceA . fmap -- "список" `a` преобразовать в аппликатив "списка" `b`, используя "лифт" `a -> f b`
+
 ```
 definitions
 
@@ -950,7 +972,8 @@ https://stepik.org/lesson/30428/step/1?unit=11045
 ### 2.2.2 asum (fold for Alternative)
 
 Как можно сочетать `Applicative` (`Alternative`) и `Foldable`?
-Рассмотрим такие сочетания, проанализируем и, в итоге, выведем `Traversable`
+Рассмотрим такие сочетания, проанализируем и, в итоге, выведем `Traversable`.
+Спойлер: использование свойств моноида для фоолд: нейтральный элемент и бинарная операция
 ```hs
 -- Подготовим песочницу
 import Data.Traversable
@@ -982,7 +1005,7 @@ asum = foldr (<|>) empty -- fold для альтернатива (сворачи
 
 ghci> fmap Just testTree -- получим `t (f a)` где фолдабл это дерево, альтернатив это мэйби, а это число
 Branch (Branch (Branch Nil (Just 1) Nil) (Just 2) (Branch Nil (Just 3) Nil)) (Just 4) (Branch Nil (Just 5) Nil)
-
+-- pre-order: 4 2 1 3 5
 ghci> asum $ fmap Just testTree
 Just 4 -- семантика First, обход пре-ордер
 
@@ -1005,13 +1028,14 @@ foldr :: Foldable t => (a -> b -> b) -> b -> t a -> b
 -- аналог фолда для аппликатива будет:
 sequenceA_ :: (Foldable t, Applicative f) => t (f a) -> f ()
 sequenceA_ = foldr (*>) (pure ())
--- "список" аппликативов связывается в цепочку (пайплайн) аппликативов на операторе "насрать на значение, сделай эффекты"
+-- "список" аппликативов связывается в цепочку (пайплайн) аппликативов на операторе "насрать на значение, сделай эффекты".
+-- Для каждого конкретного инстанса (класса) надо смотреть семантику аппликатива (эффекта).
 
 ghci> :t (*>) -- вместо mappend, правая `applied over', для попадания в сигнатуру foldr
 (*>) :: Applicative f => f a -> f b -> f b
 -- выполняет эффекты как и полноценный ап, но игнорирует левое значение
 
-ghci> :t (<*>)
+ghci> :t (<*>) -- не годится для foldr
 (<*>) :: Applicative f => f (a -> b) -> f a -> f b
 
 -- т.е. вызов сиквенс для фолдабл аппликатива развернется в такое:
@@ -1057,6 +1081,7 @@ data Tree a = Nil | Branch (Tree a) a (Tree a)   deriving (Eq, Show)
 
 реализован представитель класса типов `Foldable`
 обеспечивающий стратегию обхода pre-order traversal.
+(также функтор)
 
 Какую строку вернет следующий вызов
 
@@ -1070,7 +1095,7 @@ GHCi> fst $ sequenceA_ $ (\x -> (show x,x)) <$> tree
 
 -- почему?
 
-ghci> toList tree
+ghci> toList tree -- порядок обхода дерева
 [2,1,4,3,5] -- pre-order
 
 ghci> sequenceA_ $ (\x -> (show x,x)) <$> tree -- в значения дерева записали пары (строка, значение)
@@ -1083,6 +1108,7 @@ test
 
 foldMap для Applicative называется `traverse_`
 ```hs
+-- memory refresher, как из фолд получается секвенсА
 fold :: (Foldable t, Monoid m) => t m -> m
 fold = foldr mappend mempty
 
@@ -1175,7 +1201,7 @@ ghci> sequenceA_ pairTree
 ("21435",()) -- как и положено, выдали эффекты и юнит
 ghci> sequenceA2list pairTree -- что мы тут хотим?
 ("21435",[2,1,4,3,5]) -- эффекты и список значений? Нет, мы хотим дерево значений?
--- мы не хотим превращать любой фолдабл в список, это ну универсально
+-- мы не хотим превращать любой фолдабл в список, это не универсально
 
 -- хотим внутри аппликатива результата получить тот-же фолдабл, что и на входе,
 -- сохранить структуру фолдабл
@@ -1187,9 +1213,9 @@ sequenceA :: (Foldable t, Applicative f) => t (f a) -> f (t a)
 ```
 repl
 
+### 2.2.7 test
+
 ```hs
-https://stepik.org/lesson/30428/step/7?unit=11045
-TODO
 {--
 Реализуйте функцию
 
@@ -1209,6 +1235,56 @@ traverse2list = undefined
 
 -- solution
 -- traverse_ это foldMap для "списка" аппликативов
+
+traverse2list :: (Foldable t, Applicative f) => (a -> f b) -> t a -> f [b]
+traverse2list f = foldr (\ x y -> pure (:) <*> (f x) <*> y) (pure [])
+-- все наши сиквенсы и траверсы сделаны через foldr, поэтому функция свертки формирует список,
+-- комбинируя аппликативы через `apply over`
+
+-- traverse_ :: (Foldable t, Applicative f) => (a -> f b) -> t a -> f ()
+-- traverse_ f = foldr ((*>) . f) (pure ())
+
+-- sequenceA2list :: (Foldable t, Applicative f) => t (f a) -> f [a]
+-- sequenceA2list = foldr (\ x y -> pure (:) <*> x <*> y) (pure [])
+
+-- sequenceA_ :: (Foldable t, Applicative f) => t (f a) -> f ()
+-- sequenceA_ = foldr (*>) (pure ())
+
+-- alternative
+
+traverse2list f x = traverse f (toList x) -- как-бы читерство, не то, что в лекции показано
+-- превращается в:
+import Data.Foldable
+traverse2list :: (Foldable t, Applicative f) => (a -> f b) -> t a -> f [b]
+traverse2list = (. toList) . traverse
+
+-- берём toList
+toList :: Foldable t => t a -> [a]
+-- берём любую функцию, которая может обработать его результат
+(. toList) :: Foldable t => ([a] -> c) -> t a -> c
+-- ключевой момент: вот это сечение оператора композиции дает нам:
+-- возможность задать первым параметром функцию-обработчик-списка,
+-- вторым параметром изначальный фолдабл.
+-- Т.е. мы получаем некий адаптер, которому надо скормить нужный обработчик.
+-- Можно посмотреть так: композиция дает нам прямой пайплайн: получить список, пройтись по нему.
+
+-- результат traverse - функция ([a] -> f [b]), подходящая на вход в (. toList), 
+-- подставляем результат traverse на вход в (. toList)  - композиция
+(.toList) .traverse :: (Foldable t, Applicative f) => (a -> f b) -> t a -> f [b]
+
+-- О выводе (обратный ход)
+-- берём очевидное решение
+traverse2list f x = traverse f (toList x)
+-- выражаем через x
+traverse2list f x = (traverse f) (toList x)
+traverse2list f x = (traverse f . toList) x
+-- η  - преобразование 1
+traverse2list f = traverse f . toList
+-- выражаем через f
+traverse2list f = (. toList) (traverse f)  
+traverse2list f = ((. toList).traverse) f  
+-- η  - преобразование 2
+traverse2list = (. toList).traverse
 
 ```
 test
@@ -1238,6 +1314,7 @@ repl
 ### 2.2.9 instance Traversable Maybe
 
 Представители (инстансы) траверсабл, реализация для: мейби.
+
 Реализация траверсабл повторяет реализацию функтора (fmap), с добавлением прослойки типа аппликатив
 ```hs
 class (Functor t, Foldable t) => Traversable t where
@@ -1257,7 +1334,7 @@ instance Traversable Maybe where
 -- examples
 
 ghci> traverse (\ x -> [x, x+2, x^2]) (Just 5)
-[Just 5,Just 7,Just 25] -- аппликатив это список
+[Just 5, Just 7, Just 25] -- аппликатив это список
 -- выполнены эффекты, список из трех элементов;
 -- воспроизведена структура фолдабл функтора мэйби: результаты завернуты в Just
 
@@ -1285,7 +1362,6 @@ instance Traversable Maybe where
 
 -- траверсабл позволяет нам обобщить функтор (вычисление в контексте) до цепочки вычислений с эффектами
 -- это наблюдение позволяет нам, имея реализацию функтора для (конструктора) типа, написать траверсабл механически
-
 ```
 repl
 
@@ -1298,26 +1374,26 @@ class Functor f where
     fmap :: (a -> b) -> f a -> f b
 instance Functor ((,) s) where
     fmap g (x, y) = (x, g y)
-    fmap g (x, y) = (,) x (g y)
+    fmap g (x, y) = (,) x (g y) -- применение конструктора к данным
 
 instance Traversable ((,) s) where
     traverse :: Applicative f => (a -> f b) -> (s, a) -> f (s, b)
     traverse g (x, y) = (pure ((,) x)) <*> (g y) -- аналогично: поднять конструктор пары в аппликатив, ап его на результат (g y)
-    traverse g (x, y) = ((,) x) <$> (g y) -- согласно закону левого pure для аппликатива
+    traverse g (x, y) = ((,) x) <$> (g y) -- (см. fmap) согласно закону левого pure для аппликатива
 
 -- examples
 
 ghci> sequenceA ("foo", Just 42)
-Just ("foo",42)
+Just ("foo", 42)
 
 ghci> sequenceA $ sequenceA ("foo", Just 42)
-("foo",Just 42)
+("foo", Just 42)
 ```
 repl
 
+### 2.2.11 test
+
 ```hs
-https://stepik.org/lesson/30428/step/11?unit=11045
-TODO
 {--
 Сделайте тип `Triple`
 
@@ -1336,17 +1412,43 @@ Tr (Tr 1 4 7) (Tr 2 5 8) (Tr 3 6 9)
 --}
 
 -- solution
+-- мы уже сделали его фолдабл
+-- уже была реализация Applicative для Triple
+
+-- data Triple a = Tr a a a  deriving (Eq,Show)
+instance Traversable Triple where
+    -- traverse :: (Applicative f)=> (a -> f b) -> (Triple a) -> f (Triple b)
+    traverse f (Tr x y z) = Tr <$> (f x) <*> (f y) <*> (f z) -- см. функтор, плюс протаскивание конструктора в аппликатив
+{--
+instance Functor Triple where
+    fmap :: (a -> b) -> Triple a -> Triple b
+    fmap f (Tr x y z) = Tr (f x) (f y) (f z)
+
+instance Applicative Triple where
+    pure :: a -> Triple a
+    pure x = Tr x x x
+    (<*>) :: Triple (a -> b) -> Triple a -> Triple b
+    (Tr fx fy fz) <*> (Tr x y z) = Tr (fx x) (fy y) (fz z)
+instance Foldable Triple where
+    foldMap f (Tr x y z) = (f x) `mappend` ((f y) `mappend` (f z))
+--}
+
+-- alternative
+
+instance Traversable Triple where
+    -- sequenceA :: Applicative f => t (f a) -> f (t a)
+    sequenceA (Tr x y z) = Tr <$> x <*> y <*> z -- затаскивание конструктора внутрь
 
 ```
 test
 
+### 2.2.12 test
+
 ```hs
-https://stepik.org/lesson/30428/step/12?unit=11045
-TODO
 {--
 Сделайте тип данных `Result`
 
-data Result a = Ok a | Error String deriving (Eq,Show)
+data Result a = Ok a | Error String deriving (Eq, Show)
 
 представителем класса типов `Traversable` (и всех других необходимых классов типов).
 
@@ -1357,6 +1459,45 @@ GHCi> traverse (\x->[x+2,x-2]) (Error "!!!")
 --}
 
 -- solution
+
+-- data Result a = Ok a | Error String deriving (Eq, Show)
+instance Functor Result where
+    -- fmap :: (a -> b) -> Result a -> Result b
+    fmap _ (Error s) = Error s
+    fmap f (Ok x) = Ok $ f x
+
+-- Applicative вообще не надо было реализовывать
+instance Applicative Result where
+    -- pure :: a -> Result a
+    pure = Ok
+    -- (<*>) :: Result (a -> b) -> Result a -> Result b
+    (Ok f) <*> (Ok x) = Ok $ f x
+    (Error s) <*> _ = Error s -- ошибки можно склеивать, не надо?
+    _ <*> (Error s) = Error s
+
+instance Foldable Result where
+    -- foldMap :: Monoid m => (a -> m) -> Result a -> m
+    foldMap _ (Error s) = mempty
+    foldMap f (Ok x) = f x
+
+instance Traversable Result where
+    -- traverse :: Applicative f => (a -> f b) -> Result a -> f (Result b)
+    traverse f (Error s) = pure $ Error s
+    traverse f (Ok x) = Ok <$> f x
+
+-- alternative
+
+instance Functor Result where
+  fmap f (Ok x)    = Ok (f x)
+  fmap _ (Error s) = Error s
+
+instance Foldable Result where
+  foldMap f (Ok x)    = f x
+  foldMap _ (Error _) = mempty
+
+instance Traversable Result where
+  sequenceA (Ok x)    = Ok <$> x
+  sequenceA (Error s) = pure (Error s)
 
 ```
 test
@@ -1420,6 +1561,7 @@ ghci> traverse (\x -> [x^2, x+10]) [1,2,3] -- каждое число будет
 -- x: 1, 11 два варианта первого числа (1 ^2, +10)
 
 -- это была демонстрация семантики "каждый с каждым". Что насчет семантики "зип"?
+
 ghci> sequenceA (map ZipList [[11,21], [12,22], [13,23]]) -- два элемента, внутри которых будут результаты зипа трех списков
 ZipList {getZipList = [[11,12,13],[21,22,23]]} -- список первых элементов, список вторых элементов
 -- идентично
@@ -1439,9 +1581,9 @@ ZipList {getZipList = [[11,12,13],[21,22,23]]}
 ```
 repl
 
+### 2.2.14 test
+
 ```hs
-https://stepik.org/lesson/30428/step/14?unit=11045
-TODO
 {--
 Сделайте двоичное дерево
 
@@ -1460,12 +1602,45 @@ GHCi> sequenceA $ Branch (Branch Nil [1,2] Nil) [3] Nil
 -- solution
 -- дерево (как и список) представляет коллекцию. Какую семантику аппликатива для дерева выбрать?
 
+-- data Tree a = Nil | Branch (Tree a) a (Tree a)  deriving (Eq, Show)
+instance Traversable Tree where
+    -- sequenceA :: (Applicative f)=> Tree (f a) -> f (Tree a)
+    sequenceA Nil = pure Nil
+    sequenceA (Branch l m r) = Branch <$> (sequenceA l) <*> m <*> (sequenceA r)
+
+instance Functor Tree where
+    fmap f Nil = Nil
+    fmap f (Branch l x r) = Branch (fmap f l) (f x) (fmap f r)
+
+instance Foldable Tree where
+    foldr f ini Nil = ini
+    -- foldr f ini (Branch l x r) = f x (foldr f iniR l) where iniR = foldr f ini r -- pre-order
+    foldr f ini (Branch l x r) = foldr f (f x iniR) l  where iniR = (foldr f ini r) -- in-order
+
+-- alternative
+
+import           Data.Monoid
+instance Functor Tree where
+  fmap _ Nil            = Nil
+  fmap f (Branch l m r) = Branch (fmap f l) (f m) (fmap f r)
+
+instance Foldable Tree where foldMap = foldMapInt (\ l m r -> l <> m <> r)
+
+instance Traversable Tree where
+  sequenceA Nil            = pure Nil
+  sequenceA (Branch l m r) = Branch <$> sequenceA l <*> m <*> sequenceA r
+
+foldMapInt::Monoid b=> (b->b->b->b) -> (a->b) -> Tree a -> b
+foldMapInt g f = go where
+  go Nil            = mempty
+  go (Branch l m r) = g (go l) (f m) (go r)
+
 ```
 test
 
+### 2.2.15 test
+
 ```hs
-https://stepik.org/lesson/30428/step/15?unit=11045
-TODO
 {--
 Сделайте тип `Cmps`
 
@@ -1482,6 +1657,26 @@ Left 2
 --}
 
 -- solution
+
+instance (Traversable a, Traversable b)=> Traversable (a |.| b) where
+    -- traverse :: (Applicative f) => (x -> f y) -> (|.|) a b x -> f ((|.|) a b y)
+    traverse f (Cmps x) = Cmps <$> traverse (traverse f) x -- протащить через два барьера
+{--
+instance (Functor f, Functor g)=> Functor (f |.| g) where
+    -- fmap :: (a -> b) -> (f |.| g) a -> (f |.| g) b
+    fmap h (Cmps x) = Cmps $ fmap (fmap h) x
+--}
+
+-- alternative
+
+instance (Traversable f, Traversable g)=>Traversable (f |.| g) where
+    sequenceA (Cmps x) = Cmps <$> sequenceA (sequenceA <$> x) -- два раза вывернуть наизнанку
+
+instance (Traversable f, Traversable g) => Traversable ((|.|) f g) where
+    sequenceA (Cmps x) = Cmps <$> traverse sequenceA x
+
+instance (Traversable f, Traversable g) => Traversable (f |.| g) where
+    sequenceA = fmap Cmps . traverse sequenceA . getCmps
 
 ```
 test

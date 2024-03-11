@@ -26,6 +26,23 @@ https://stackoverflow.com/questions/23342184/difference-between-monad-and-applic
 Стандартные тайп-классы и их законы:
 The standard Haskell libraries feature a number of type classes with algebraic or category-theoretic underpinnings https://wiki.haskell.org/Typeclassopedia
 
+Композиция функций как инструмент преобразования выражений:
+```hs
+-- Берём выражение из двух функций: traverse, toList
+traverse2list f x = traverse f (toList x)
+-- выражаем через x
+traverse2list f x = (traverse f) (toList x)
+traverse2list f x = (traverse f . toList) x
+-- η  - преобразование 1
+traverse2list f = traverse f . toList
+-- выражаем через f
+traverse2list f = (. toList) (traverse f)  
+traverse2list f = ((. toList).traverse) f  
+-- η  - преобразование 2
+traverse2list = (. toList).traverse
+```
+composition
+
 ## links
 
 - The standard Haskell libraries feature a number of type classes with algebraic or category-theoretic underpinnings https://wiki.haskell.org/Typeclassopedia
