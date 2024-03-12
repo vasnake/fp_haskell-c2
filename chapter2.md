@@ -1700,15 +1700,15 @@ https://stepik.org/lesson/31555/step/1?unit=11808
 что не удивительно, учитывая их близкую природу
 ```hs
 -- identity law
+
 -- вспомним, как это было для функтора
-
 class Functor f where
-    fmap :: (a -> b) -> f a -> f b -- <$>
+    fmap :: (a -> b) -> f a -> f b -- operator <$>
 
-fmap id = id -- identity law для функтора, структура не меняется (и значения не меняются)
+fmap id = id -- identity law для функтора, структура "контейнера" не меняется (и значения не меняются)
 
--- для траверсабла так нельзя,
--- 1: по сигнатуре ф. id сюда не подходит,
+-- для траверсабла так нельзя:
+-- 1: по сигнатуре функция id сюда не подходит,
 -- 2: сам смысл траверса в том, что меняется структура (аппликатив наружу, траверс. внутрь)
 -- как быть?
 
@@ -1744,7 +1744,8 @@ repl
 
 ### 2.3.3 traverse composition law
 
-Закон композиции траверсов (идентичность траверсу композиции стрелок Клейсли)
+Закон композиции траверсов (идентичность траверсу композиции стрелок Клейсли):
+траверс композиции эквивалентен композиции траверсов
 ```hs
 -- Как это было для функтора
 class Functor f where
@@ -1765,7 +1766,7 @@ traverse $ Compose . (fmap g2) . g1 = Compose . (fmap $ traverse g2) . (traverse
 -- но почему g2, g1 а не g1, g2 ?
 
 ghci> :i Compose
-newtype Compose f g a = Compose {getCompose :: f (g a)} -- Defined in ‘Data.Functor.Compose’
+newtype Compose f g a = Compose { getCompose :: f (g a) } -- Defined in ‘Data.Functor.Compose’
 infixr 9 `Compose` -- право-ассоциативный
 
 ghci> :t Compose
@@ -1823,10 +1824,11 @@ repl
 - посещает все узлы структуры
 - каждый узел посещается ровно 1 раз
 - реализация `pure` для аппликатива: тривиальна (без эффектов и вычислений)
-- не меняет структуру контейнера (клонирует контекст), хотя может выдать "пустой" контейнер,
+- не меняет структуру контейнера (клонирует контекст), хотя может выдать "пустой" "контейнер",
 если аппликативный функтор реализует такой эффект (WHA?)
 
 `traverse` это по сути `fmap` но с эффектами, обеспечиваемыми аппликативными функторами.
+Ибо перебор элементов это цепочка (пайплайн) аппликативов.
 
 Остальные 4 закона для `Traversable`
 ```hs
@@ -1847,9 +1849,9 @@ t . sequenceA = sequenceA . fmap t                              -- naturality
 ```
 repl
 
+### 2.3.5 test
+
 ```hs
-https://stepik.org/lesson/31555/step/5?unit=11808
-TODO
 {--
 В предположении что обе части закона `composition` для `sequenceA`
 
@@ -1863,13 +1865,22 @@ sequenceA . fmap Compose == Compose . fmap sequenceA . sequenceA
 --}
 
 -- solution
+-- здесь мы разбираем composition law для sequenceA
+
+f (t (g a)) -> f (g (t a))
+
+-- почему так?
+`fmap foo` дает стрелку, частично примененную функцию,
+`fmap sequenceA` дает стрелку, на выходе которой должен быть аргумент `Compose`, т.е. `f (g (t a))`,
+Поскольку фмапом мы протаскиваем именно `sequenceA` то аппликатив и траверсабл меняются местами через одну границу,
+`g` и `t` меняются местами.
 
 ```
 test
 
+### 2.3.6 test
+
 ```hs
-https://stepik.org/lesson/31555/step/6?unit=11808
-TODO
 {--
 Рассмотрим следующий тип данных
 
@@ -1901,12 +1912,60 @@ GHCi> traverse (\x->[x+2,x-2]) cnt1
 
 -- solution
 
+import Data.Monoid ( (<>), )
+-- data OddC a = Un a | Bi a a (OddC a) deriving (Eq, Show)
+instance Functor OddC where
+    -- fmap :: (a -> b) -> OddC a -> OddC b
+    fmap f (Un x) = Un (f x)
+    fmap f (Bi x y rest) = Bi (f x) (f y) (fmap f rest)
+instance Foldable OddC where
+    -- foldMap :: (Monoid m)=> (a -> m) -> OddC a -> m
+    foldMap f (Un x) = f x
+    foldMap f (Bi x y rest) = f x <> f y <> (foldMap f rest)
+instance Traversable OddC where
+    -- Если сделать fmap = fmapDefault, то перестанет работать. Лучше traverse реализовывать
+    -- sequenceA :: (Applicative f)=> OddC (f a) -> f (OddC a)
+    sequenceA (Un x) = Un <$> x
+    sequenceA (Bi x y rest) = Bi <$> x <*> y <*> (sequenceA rest)
+
+-- alternatives
+
+{-# LANGUAGE StandaloneDeriving #-}
+{-# LANGUAGE DeriveFunctor #-}
+{-# LANGUAGE DeriveFoldable #-}
+{-# LANGUAGE DeriveTraversable #-}
+deriving instance Functor OddC
+deriving instance Foldable OddC
+deriving instance Traversable OddC
+
+import Data.Monoid((<>))
+import Control.Applicative(liftA3)
+instance Functor OddC where
+    fmap f (Un x) = Un $ f x
+    fmap f (Bi x y r) = Bi (f x) (f y) $ fmap f r
+instance Foldable OddC where
+    foldMap f (Un x) = f x
+    foldMap f (Bi x y r) = f x <> f y <> foldMap f r
+instance Traversable OddC  where
+    sequenceA (Un x) = Un <$> x
+    sequenceA (Bi x y r) = liftA3 Bi x y $ sequenceA r
+
+import Data.Traversable
+import Control.Applicative
+instance Traversable OddC where
+    traverse f (Un x)     = liftA  Un (f x)
+    traverse f (Bi x y r) = liftA3 Bi (f x) (f y) (traverse f r)
+instance Functor OddC where
+    fmap = fmapDefault
+instance Foldable OddC where
+    foldMap = foldMapDefault
+
 ```
 test
 
 ### 2.3.7 фантомные типы
 
-> A phantom type is a parameterised type whose parameters do not all appear on the right-hand side of its definitio
+> A phantom type is a parameterised type whose parameters do not all appear on the right-hand side of its definition
 https://wiki.haskell.org/Phantom_type
 
 Враппер дизайн-тайм для создания разных типов на базе одного.
@@ -1932,9 +1991,9 @@ c2f (Temperature c) = Temperature (1.8 * c + 32)
 ```
 repl
 
+### 2.3.8 test
+
 ```hs
-https://stepik.org/lesson/31555/step/8?unit=11808
-TODO
 {--
 Расширьте интерфейс для работы с температурами из предыдущего видео
 Кельвинами
@@ -1970,7 +2029,7 @@ k2c = undefined
 
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 newtype Temperature a = Temperature Double
-  deriving (Num,Show,Eq)
+  deriving (Num, Show, Eq, Fractional)
 
 data Celsius
 data Fahrenheit 
@@ -1982,8 +2041,8 @@ comfortTemperature = Temperature 23
 c2f :: Temperature Celsius -> Temperature Fahrenheit
 c2f (Temperature c) = Temperature (1.8 * c + 32)
 
-k2c :: Double -> Temperature Celsius
-k2c k = Temperature (k - 273.15)
+k2c :: Temperature Kelvin -> Temperature Celsius
+k2c (Temperature k) = Temperature (k - 273.15)
 
 ```
 test
@@ -2045,8 +2104,9 @@ repl
 ### 2.3.10 `fmapDefault` для вывода Functor из Traversable
 
 В Хаскел можно провернуть интересный трюк:
-реализовать, скажем, `Traversable` для некоего типа, после чего для этого типа,
+реализовать `Traversable` для некоего типа, после чего для этого типа,
 реализации `Functor` и `Foldable` появятся автомагически.
+
 Посмотрим, как это возможно (спойлер: существует функция `fmapDefault`, реализующая `fmap`).
 А еще это возможно из-за ад-хок полиморфизма: в наличии инстансы с реализацией нужных методов.
 ```hs
@@ -2065,8 +2125,12 @@ instance Traversable Result where
     traverse f (Ok x) = (pure Ok) <*> (f x)
     -- traverse f (Ok x) = Ok <$> f x
 
+-- check
 ghci> traverse (\x -> [x+10, x+20]) (Ok 5)
 [Ok 15,Ok 25]
+
+-- а теперь фокус:
+instance Functor Result where fmap = fmapDefault
 
 -- почему это возможно: fmapDefault
 
@@ -2075,8 +2139,6 @@ fmapDefault f = runIdentity . traverse (Identity . f) -- по сути, подн
 -- мы уже видели, что траверсабл и функтор это близнецы-братья
 -- траверс должен был бы дать эффекты от ап.функтора, но айдентити не содержит эффектов, поэтому тут эффектов не будет,
 -- эквивалентно поведению функтора
-
-instance Functor Result where fmap = fmapDefault
 
 ghci> :t fmap -- для справки
 fmap :: Functor f => (a -> b) -> f a -> f b
@@ -2097,6 +2159,8 @@ repl
 
 Продолжим предыдущую тему. Как, имея траверсабл, сделать фолдабл?
 ```hs
+instance Foldable Result where foldMap = foldMapDefault
+
 -- для справки, Foldable реализуется через фолдмэп:
 ghci> :t foldMap
 foldMap :: (Foldable t, Monoid m) => (a -> m) -> t a -> m
@@ -2116,16 +2180,14 @@ instance (Monoid c) => Applicative (Const c) where
     <*> :: Const c (a -> b) -> Const c a -> Const c b -- a, b это фантомы, их нет
     (<*>) (Const f) (Const v) = Const (mappend f v) -- семантика пары: (лог, _)
 
-instance Foldable Result where foldMap = foldMapDefault
-
 ghci> foldr (+) 37 (Ok 5)
 42
 ```
 repl
+ 
+### 2.3.12 test
 
 ```hs
-https://stepik.org/lesson/31555/step/12?unit=11808
-TODO
 {--
 Сделайте двоичное дерево
 
@@ -2148,13 +2210,32 @@ instance Traversable Tree where
 
 -- solution
 -- надо либо traverse определять, либо sequenceA и fmap
+-- предполагаю, что от нас хотят реализацию траверс
+
+import Data.Traversable (foldMapDefault)
+instance Foldable Tree where
+    foldMap = foldMapDefault
+instance Traversable Tree where
+    -- traverse :: (Applicative f)=> (a -> f b) -> Tree a -> f (Tree b)
+    traverse f (Nil) = pure Nil
+    -- traverse f (Branch l m r) = Branch <$> (traverse f l) *> (traverse f r) <* (f m) -- test #3 failed
+    traverse f (Branch l m r) = (\ x y z -> Branch x z y) <$> (traverse f l) <*> (traverse f r) <*> (f m)
+
+-- alternatives
+
+import Data.Traversable (foldMapDefault)
+instance Foldable Tree where
+  foldMap = foldMapDefault
+instance Traversable Tree where
+  sequenceA Nil               = pure Nil
+  sequenceA (Branch fl fm fr) = (flip . Branch) <$> sequenceA fl <*> sequenceA fr <*> fm
 
 ```
 test
 
 ### 2.3.13 `sequence`, `mapM` в Traversable для монад
 
-Есть еще две функции класса траверсабл: sequence, mapM
+Есть еще две функции класса траверсабл: `sequence`, `mapM`
 ```hs
 class (Functor t, Foldable t) => Traversable t where
     sequenceA :: Applicative f => t (f a) -> f (t a) -- "список" аппликативов преобразовать в аппликатив "списка"

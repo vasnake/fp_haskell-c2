@@ -18,6 +18,7 @@
 {-# HLINT ignore "Fuse foldMap/fmap" #-}
 {-# HLINT ignore "Fuse foldMap/map" #-}
 {-# HLINT ignore "Use <$>" #-}
+{-# HLINT ignore "Use :" #-}
 
 module TestEffects where
 
@@ -67,12 +68,12 @@ test4 = foldr (*) 3 (13, 14)
 data Tree a = Nil | Branch (Tree a) a (Tree a) deriving (Eq, Show)
 testTree = Branch (Branch (Branch Nil 1 Nil) 2 (Branch Nil 3 Nil)) 4 (Branch Nil 5 Nil)
 -- in-order: 1 2 3 4 5
-
+{--
 instance Foldable Tree where
     foldr f ini Nil = ini
     -- foldr f ini (Branch l x r) = f x (foldr f iniR l) where iniR = foldr f ini r -- pre-order
     foldr f ini (Branch l x r) = foldr f (f x iniR) l  where iniR = (foldr f ini r) -- in-order
-
+--}
 treeToList :: Tree a -> [a]
 treeToList = foldr (:) []
 
@@ -520,11 +521,12 @@ GHCi> sequenceA $ Branch (Branch Nil [1,2] Nil) [3] Nil
 --}
 
 -- data Tree a = Nil | Branch (Tree a) a (Tree a)  deriving (Eq, Show)
+{--
 instance Traversable Tree where
     sequenceA :: (Applicative f)=> Tree (f a) -> f (Tree a)
     sequenceA Nil = pure Nil
     sequenceA (Branch l m r) = Branch <$> (sequenceA l) <*> m <*> (sequenceA r)
-
+--}
 {--
 instance Functor Tree where
     fmap f Nil = Nil
@@ -572,3 +574,104 @@ instance (Foldable a, Foldable b) => Foldable (a |.| b) where
 
 test45 = sequenceA (Cmps [Just (Right 2), Nothing]) -- Right (Cmps {getCmps = [Just 2,Nothing]})
 test46 = sequenceA (Cmps [Just (Left 2), Nothing]) -- Left 2
+
+
+{--
+Рассмотрим следующий тип данных
+
+data OddC a = Un a | Bi a a (OddC a) deriving (Eq,Show)
+
+Этот тип представляет собой контейнер-последовательность, который по построению может содержать только нечетное число элементов:
+
+GHCi> cnt1 = Un 42
+GHCi> cnt3 = Bi 1 2 cnt1
+GHCi> cnt5 = Bi 3 4 cnt3
+GHCi> cnt5
+Bi 3 4 (Bi 1 2 (Un 42))
+GHCi> cntInf = Bi 'A' 'B' cntInf
+GHCi> cntInf
+Bi 'A' 'B' (Bi 'A' 'B' (Bi 'A' 'B' (Bi 'A' 'B' (Bi 'A' 'B' (Bi 'A' 'B' (Bi 'A' 'B' (Bi 'A' 'B' (Bi 'A' 'B' (Bi 'A' 'B' (Bi 'A' 'Interrupted.
+GHCi>
+
+Сделайте этот тип данных представителем классов типов `Functor`, `Foldable` и `Traversable`:
+
+GHCi> (+1) <$> cnt5
+Bi 4 5 (Bi 2 3 (Un 43))
+GHCi> toList cnt5
+[3,4,1,2,42]
+GHCi> sum cnt5
+52
+GHCi> traverse (\x->[x+2,x-2]) cnt1
+[Un 44,Un 40]
+--}
+
+data OddC a = Un a | Bi a a (OddC a) deriving (Eq, Show)
+
+instance Functor OddC where
+    fmap :: (a -> b) -> OddC a -> OddC b
+    fmap f (Un x) = Un (f x)
+    fmap f (Bi x y rest) = Bi (f x) (f y) (fmap f rest)
+
+instance Foldable OddC where
+    foldMap :: (Monoid m)=> (a -> m) -> OddC a -> m
+    foldMap f (Un x) = f x
+    foldMap f (Bi x y rest) = f x <> f y <> (foldMap f rest)
+
+instance Traversable OddC where
+    sequenceA :: (Applicative f)=> OddC (f a) -> f (OddC a)
+    sequenceA (Un x) = Un <$> x
+    sequenceA (Bi x y rest) = Bi <$> x <*> y <*> (sequenceA rest)
+
+cnt1 = Un 42
+cnt3 = Bi 1 2 cnt1
+cnt5 = Bi 3 4 cnt3
+cntInf = Bi 'A' 'B' cntInf
+test47 = cnt5 -- Bi 3 4 (Bi 1 2 (Un 42))
+
+test48 = (+1) <$> cnt5 -- Bi 4 5 (Bi 2 3 (Un 43))
+test49 = toList cnt5 -- [3,4,1,2,42]
+test50 = sum cnt5 -- 52
+test51 = traverse (\x->[x+2,x-2]) cnt1 -- [Un 44,Un 40]
+
+
+{--
+Сделайте двоичное дерево
+
+data Tree a = Nil | Branch (Tree a) a (Tree a)  deriving (Eq, Show)
+
+представителем класса типов `Traversable` таким образом, 
+чтобы обеспечить для `foldMapDefault` порядок обхода «postorder traversal»:
+
+GHCi> testTree = Branch (Branch (Branch Nil 1 Nil) 2 (Branch Nil 3 Nil)) 4 (Branch Nil 5 Nil)
+GHCi> foldMapDefault (\x -> [x]) testTree
+[1,3,2,5,4]
+--}
+
+-- solution
+-- надо либо traverse определять, либо sequenceA и fmap
+
+-- import Data.Traversable (foldMapDefault)
+-- data Tree a = Nil | Branch (Tree a) a (Tree a)  deriving (Eq, Show)
+
+instance Foldable Tree where
+    foldMap = foldMapDefault
+    -- foldMap f Nil = mempty
+    -- foldMap f (Branch l x r) = (foldMap f l) <> (foldMap f r) <> (f x)
+
+instance Traversable Tree where
+    traverse :: (Applicative f)=> (a -> f b) -> Tree a -> f (Tree b)
+    traverse f (Nil) = pure Nil
+    -- traverse f (Branch l m r) = Branch <$> (traverse f l) *> (traverse f r) <* (f m) -- test #3 failed
+    -- traverse f (Branch l m r) = (\ x y z -> Branch x z y) <$> (traverse f l) <*> (traverse f r) <*> (f m)
+    traverse f (Branch l m r) = (flip . Branch) <$> (traverse f l) <*> (traverse f r) <*> (f m)
+
+{--
+instance Traversable Tree where
+    sequenceA :: (Applicative f)=> Tree (f a) -> f (Tree a)
+    sequenceA Nil = pure Nil
+    sequenceA (Branch l m r) = Branch <$> (sequenceA l) <*> m <*> (sequenceA r)
+--}
+
+-- foldMapDefault f = getConst . traverse (Const . f)
+testTree2 = Branch (Branch (Branch Nil 1 Nil) 2 (Branch Nil 3 Nil)) 4 (Branch Nil 5 Nil)
+test52 = foldMapDefault (\x -> [x]) testTree2 -- [1,3,2,5,4]
