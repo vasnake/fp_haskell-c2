@@ -36,10 +36,10 @@ traverse2list f x = (traverse f . toList) x
 -- η  - преобразование 1
 traverse2list f = traverse f . toList
 -- выражаем через f
-traverse2list f = (. toList) (traverse f)  
-traverse2list f = ((. toList).traverse) f  
+traverse2list f = (. toList) (traverse f)
+traverse2list f = ((. toList) . traverse) f
 -- η  - преобразование 2
-traverse2list = (. toList).traverse
+traverse2list = (. toList) . traverse
 ```
 composition
 

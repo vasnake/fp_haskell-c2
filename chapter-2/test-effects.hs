@@ -1,11 +1,12 @@
--- {-# LANGUAGE InstanceSigs #-} -- позволяет писать сигнатуры для инстансов
+{-# LANGUAGE InstanceSigs #-} -- позволяет писать сигнатуры для инстансов
+{-# LANGUAGE TypeOperators #-} -- для разрешения `|.|` в качестве имени оператора над типами
 -- {-# LANGUAGE FunctionalDependencies #-}
 -- {-# LANGUAGE MultiParamTypeClasses #-}
--- {-# LANGUAGE TypeOperators #-} -- для разрешения `|.|` в качестве имени оператора над типами
 -- {-# LANGUAGE PolyKinds #-}
 
 {-# OPTIONS_GHC -Wno-noncanonical-monad-instances #-}
 {-# OPTIONS_GHC -Wno-noncanonical-monoid-instances #-}
+{-# OPTIONS_GHC -Wno-typed-holes #-}
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 
 {-# HLINT ignore "Use traverse_" #-}
@@ -28,7 +29,7 @@ import Data.Function ( (&), )
 
 import Data.Monoid (
     Sum(..), Product(..), Endo(..), appEndo, (<>), Dual(..), First(..),
-    getAny, Any(..), getLast, Last(..), getAll, All(..),
+    getAny, Any(..), getLast, Last(..), getAll, All(..), (<>)
     )
 
 -- import Control.Monad.Identity ( Identity(..) )
@@ -37,7 +38,7 @@ import Data.Functor.Compose ( Compose(..) )
 import Data.Functor ((<&>))
 
 import Control.Applicative (
-    Applicative(..), (<*>), (<$>), ZipList(..), (<**>), (<|>)
+    Applicative(..), (<*>), (<$>), ZipList(..), (<**>), (<|>), liftA3, liftA2,
     )
 
 import Data.Foldable (
@@ -58,6 +59,7 @@ import Prelude (
     foldr, foldl, Either(..), Monoid(..), Semigroup(..), putStrLn, print, (*), (>), (/), (^),
     map, (=<<), (>>=), return, flip, (++), fail, Ord(..), (>>), take,
     even, Bool(..), odd,
+    Monad(..),
     )
 
 test = foldr (+) 0 [0..42]
@@ -675,3 +677,116 @@ instance Traversable Tree where
 -- foldMapDefault f = getConst . traverse (Const . f)
 testTree2 = Branch (Branch (Branch Nil 1 Nil) 2 (Branch Nil 3 Nil)) 4 (Branch Nil 5 Nil)
 test52 = foldMapDefault (\x -> [x]) testTree2 -- [1,3,2,5,4]
+
+
+{--
+Сделайте парсер `PrsE` (из первого модуля курса) представителем класса типов Monad
+
+newtype PrsE a = PrsE { runPrsE :: String -> Either String (a, String) }
+
+GHCi> runPrsE (do {a <- charE 'A'; b <- charE 'B'; return (a,b)}) "ABC"
+Right (('A','B'),"C")
+GHCi> runPrsE (do {a <- charE 'A'; b <- charE 'B'; return (a,b)}) "ACD"
+Left "unexpected C"
+GHCi> runPrsE (do {a <- charE 'A'; b <- charE 'B'; return (a,b)}) "BCD"
+Left "unexpected B"
+--}
+newtype PrsE a = PrsE { runPrsE :: String -> Either String (a, String) }
+instance Monad PrsE where
+  (>>=) :: PrsE a -> (a -> PrsE b) -> PrsE b
+  (PrsE a) >>= k = PrsE b where
+    b str = do -- either monad
+        (x1, s1) <- a str -- left
+        (x2, s2) <- runPrsE (k x1) s1 -- right
+        return (x2, s2)
+
+instance Functor PrsE where
+  fmap :: (a -> b) -> PrsE a -> PrsE b
+  fmap a2b (PrsE parsA) = PrsE parsB where
+    parsB str = do -- either monad
+        (a, rest) <- parsA str
+        return (a2b a, rest)
+
+instance Applicative PrsE where
+  pure :: a -> PrsE a
+  pure a = PrsE (\s -> return (a, s))
+
+  (<*>) :: PrsE (a -> b) -> PrsE a -> PrsE b
+  (PrsE parsA2b) <*> (PrsE parsA) = PrsE parsB where
+    parsB str = do -- either monad
+        (a2b, s1) <- parsA2b str -- left
+        (a, s2) <- parsA s1 -- right
+        return (a2b a, s2) -- combine
+
+charE :: Char -> PrsE Char
+charE c = satisfyE (== c)
+
+satisfyE :: (Char -> Bool) -> PrsE Char
+satisfyE pred = PrsE fun where
+    fun "" = Left "unexpected end of input"
+    fun (c:cs) = if pred c then Right (c, cs) else Left ("unexpected " ++ [c])
+
+test53 = runPrsE (do {a <- charE 'A'; b <- charE 'B'; return (a,b)}) "ABC" -- Right (('A','B'),"C")
+test54 = runPrsE (do {a <- charE 'A'; b <- charE 'B'; return (a,b)}) "ACD" -- Left "unexpected C"
+test55 = runPrsE (do {a <- charE 'A'; b <- charE 'B'; return (a,b)}) "BCD" -- Left "unexpected B"
+
+
+{--
+Для типа данных `OddC`
+(контейнер-последовательность, который по построению может содержать только нечетное число элементов)
+
+data OddC a = Un a | Bi a a (OddC a) deriving (Eq,Show)
+
+реализуйте функцию
+
+concat3OC :: OddC a -> OddC a -> OddC a -> OddC a
+
+конкатенирующую три таких контейнера в один:
+
+GHCi> tst1 = Bi 'a' 'b' (Un 'c')
+GHCi> tst2 = Bi 'd' 'e' (Bi 'f' 'g' (Un 'h'))
+GHCi> tst3 = Bi 'i' 'j' (Un 'k')
+GHCi> concat3OC tst1 tst2 tst3
+Bi 'a' 'b' (Bi 'c' 'd' (Bi 'e' 'f' (Bi 'g' 'h' (Bi 'i' 'j' (Un 'k')))))
+
+Обратите внимание, что соображения четности запрещают конкатенацию двух контейнеров `OddC`.
+Реализуйте всё «честно», не сводя к стандартным спискам.
+--}
+-- data OddC a = Un a | Bi a a (OddC a) deriving (Eq,Show)
+concat3OC :: OddC a -> OddC a -> OddC a -> OddC a
+concat3OC x y z = Bi foo bar rest where
+    foo = _
+    bar = _
+    rest = _
+{--
+instance Functor OddC where
+    -- (Functor f)=>    (a -> b) -> f a -> f b -- infixl 4 <$>, fmap
+    fmap f (Un x) = Un $ f x
+    fmap f (Bi x y r) = Bi (f x) (f y) (fmap f r)
+
+instance Foldable OddC where
+    -- (Foldable t, Monoid m)=>    (a -> m) -> t a -> m
+    foldMap f (Un x) = f x
+    foldMap f (Bi x y r) = f x <> f y <> foldMap f r
+
+instance Traversable OddC  where
+    -- (Traversable t, Applicative f)=> t (f a) -> f (t a)
+    sequenceA (Un x) = Un <$> x
+    sequenceA (Bi x y r) = liftA3 Bi x y (sequenceA r)
+    -- sequenceA (Bi x y rest) = Bi <$> x <*> y <*> (sequenceA rest)
+--}
+
+instance Applicative OddC where
+    pure :: a -> OddC a
+    pure = undefined    
+    (<*>) :: OddC (a -> b) -> OddC a -> OddC b -- (Applicative f)=>  f (a -> b) -> f a -> f b -- infixl 4 <*>
+    (<*>) = undefined
+
+instance Monad OddC where
+    (>>=) :: OddC a -> (a -> OddC b) -> OddC b -- (Monad m)=>  m a -> (a -> m b) -> m b -- infixl 1 >>=
+    (>>=) = undefined
+
+tst1 = Bi 'a' 'b' (Un 'c') -- 
+tst2 = Bi 'd' 'e' (Bi 'f' 'g' (Un 'h'))
+tst3 = Bi 'i' 'j' (Un 'k')
+test56 = concat3OC tst1 tst2 tst3 -- Bi 'a' 'b' (Bi 'c' 'd' (Bi 'e' 'f' (Bi 'g' 'h' (Bi 'i' 'j' (Un 'k')))))
