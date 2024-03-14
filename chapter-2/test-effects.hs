@@ -858,3 +858,86 @@ instance Traversable OddC  where
     sequenceA (Bi x y r) = liftA3 Bi x y (sequenceA r)
     -- sequenceA (Bi x y rest) = Bi <$> x <*> y <*> (sequenceA rest)
 --}
+
+
+{--
+Выполняются ли для стандартных представителей 
+`Applicative`, `Alternative`, `Monad` и `MonadPlus` 
+типа данных `Maybe` 
+следующие законы дистрибутивности: 
+
+(u <|> v) <*> w       =    u <*> w <|> v <*> w
+
+(u `mplus` v) >>= k   =    (u >>= k) `mplus` (v >>= k)
+
+Если нет, то приведите контрпример, если да, то доказательство.
+Предполагается, что расходимости отсутствуют.
+--}
+
+{--
+Имея реализацию
+
+instance Applicative Maybe where
+    pure = Just
+    Nothing <*> _ = Nothing
+    (Just g) <*> x = fmap g x -- x :: Functor; g :: a -> b; -- если справа Nothing то fmap сделает Nothing, не надо отдельно это ловить
+
+-- альтернатива для мейби это First реализация моноида: из цепочки выходит первый не-пустой
+instance Alternative Maybe where -- n.b. наложить ограничение на `a` мы не можем, класс не позволяет добавить параметр `a`
+    empty = Nothing
+    Nothing <|> r = r
+    l <|> _ = l
+
+instance Monad Maybe where
+    (Just x) >>= k      = k x
+    Nothing  >>= _      = Nothing
+
+instance MonadPlus Maybe
+class (Alternative m, Monad m)=> MonadPlus m where
+    mzero :: m a
+    mzero = empty
+
+    mplus :: m a -> m a -> m a
+    mplus = (<|>)
+
+Покажите выполняемость законов.
+Если нет, то приведите контрпример, если да, то доказательство
+
+Applicative Maybe
+- (u <|> v) <*> w       =    u <*> w <|> v <*> w: выполняется, доказательство опирается на реализацию операторов <|> <*>
+(n | n) * _ = n             (n * _ ) | (n * _) = n
+(_ | _) * n = n             (_ * n) | (_ * n) = n
+(j1 | _) * j = j1           (j1 * j) | (_ * j) = j1
+(n | j2) * j = j2           (n * j) | (j2 * j) = j2
+
+- (u `mplus` v) >>= k   =    (u >>= k) `mplus` (v >>= k): выполняется, доказательство опирается на реализацию операторов <|> >>=
+(u | v) >>= k   =    (u >>= k) | (v >>= k)
+(n | n) > k = n         (n > k) | (n > k) = n
+(j | _) > k = kj        (j > k) | (_ > k) = kj
+(n | j) > k = kj        (n > k) | (j > k) = kj
+
+Alternative Maybe
+- (u <|> v) <*> w       =    u <*> w <|> v <*> w
+- (u `mplus` v) >>= k   =    (u >>= k) `mplus` (v >>= k)
+
+Monad Maybe
+- (u <|> v) <*> w       =    u <*> w <|> v <*> w
+- (u `mplus` v) >>= k   =    (u >>= k) `mplus` (v >>= k)
+
+MonadPlus Maybe
+- (u <|> v) <*> w       =    u <*> w <|> v <*> w
+- (u `mplus` v) >>= k   =    (u >>= k) `mplus` (v >>= k)
+
+ghci> :i (<|>)
+  (<|>) :: f a -> f a -> f a -- infixl 3 <|>
+ghci> :i (<*>)
+  (<*>) :: f (a -> b) -> f a -> f b -- infixl 4 <*>
+
+--}
+mj = Just 42
+mn = Nothing
+mjf = Just (+7)
+
+test61 = (mjf <|> mn) <*> mj -- первый непустой ап х, 
+test62 = (mjf <*> mj) <|> (mn <*> mj) -- первый непустой из двух ап
+
