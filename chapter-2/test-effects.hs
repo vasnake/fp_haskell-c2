@@ -608,12 +608,12 @@ GHCi> traverse (\x->[x+2,x-2]) cnt1
 --}
 
 data OddC a = Un a | Bi a a (OddC a) deriving (Eq, Show)
-
+{--
 instance Functor OddC where
     fmap :: (a -> b) -> OddC a -> OddC b
     fmap f (Un x) = Un (f x)
     fmap f (Bi x y rest) = Bi (f x) (f y) (fmap f rest)
-
+--}
 instance Foldable OddC where
     foldMap :: (Monoid m)=> (a -> m) -> OddC a -> m
     foldMap f (Un x) = f x
@@ -752,18 +752,101 @@ Bi 'a' 'b' (Bi 'c' 'd' (Bi 'e' 'f' (Bi 'g' 'h' (Bi 'i' 'j' (Un 'k')))))
 Обратите внимание, что соображения четности запрещают конкатенацию двух контейнеров `OddC`.
 Реализуйте всё «честно», не сводя к стандартным спискам.
 --}
--- data OddC a = Un a | Bi a a (OddC a) deriving (Eq,Show)
+-- data OddC a = Un a | Bi a a (OddC a) deriving (Eq, Show)
 concat3OC :: OddC a -> OddC a -> OddC a -> OddC a
-concat3OC x y z = Bi foo bar rest where
-    foo = _
-    bar = _
-    rest = _
-{--
-instance Functor OddC where
-    -- (Functor f)=>    (a -> b) -> f a -> f b -- infixl 4 <$>, fmap
-    fmap f (Un x) = Un $ f x
-    fmap f (Bi x y r) = Bi (f x) (f y) (fmap f r)
+concat3OC (Un x) (Un y) rest = Bi x y rest
+concat3OC (Un x) (Bi y1 y2 ys) rest = Bi x y1 (concat3OC (Un y2) ys rest)
+concat3OC (Bi x1 x2 xs) ys rest = Bi x1 x2 (concat3OC xs ys rest)
 
+tst1 = Bi 'a' 'b' (Un 'c') -- 
+tst2 = Bi 'd' 'e' (Bi 'f' 'g' (Un 'h'))
+tst3 = Bi 'i' 'j' (Un 'k')
+test56 = concat3OC tst1 tst2 tst3 -- Bi 'a' 'b' (Bi 'c' 'd' (Bi 'e' 'f' (Bi 'g' 'h' (Bi 'i' 'j' (Un 'k')))))
+
+
+{--
+Для типа данных
+
+data OddC a = Un a | Bi a a (OddC a) deriving (Eq,Show)
+
+реализуйте функцию
+
+concatOC :: OddC (OddC a) -> OddC a
+
+Она должна обеспечивать для типа `OddC` поведение, аналогичное поведению функции `concat` для списков:
+
+GHCi> concatOC $ Un (Un 42)
+Un 42
+GHCi> tst1 = Bi 'a' 'b' (Un 'c')
+GHCi> tst2 = Bi 'd' 'e' (Bi 'f' 'g' (Un 'h'))
+GHCi> tst3 = Bi 'i' 'j' (Un 'k')
+GHCi> concatOC $ Bi tst1 tst2 (Un tst3)
+Bi 'a' 'b' (Bi 'c' 'd' (Bi 'e' 'f' (Bi 'g' 'h' (Bi 'i' 'j' (Un 'k')))))
+
+Реализуйте всё «честно», не сводя к стандартным спискам.
+--}
+-- data OddC a = Un a | Bi a a (OddC a) deriving (Eq,Show)
+concatOC :: OddC (OddC a) -> OddC a
+concatOC (Un xs) = xs
+concatOC (Bi xs ys zs) = concat3OC xs ys (concatOC zs)
+
+test57 = concatOC $ Un (Un 42) -- Un 42
+tst12 = Bi 'a' 'b' (Un 'c')
+tst22 = Bi 'd' 'e' (Bi 'f' 'g' (Un 'h'))
+tst32 = Bi 'i' 'j' (Un 'k')
+test58 = concatOC $ Bi tst12 tst22 (Un tst32) -- Bi 'a' 'b' (Bi 'c' 'd' (Bi 'e' 'f' (Bi 'g' 'h' (Bi 'i' 'j' (Un 'k')))))
+
+
+{--
+Сделайте тип данных
+
+data OddC a = Un a | Bi a a (OddC a) deriving (Eq,Show)
+
+представителем классов типов `Functor`, `Applicative` и `Monad`. 
+Семантика должна быть подобной семантике представителей этих классов типов для списков: 
+монада `OddC` должна иметь эффект вычисления с произвольным нечетным числом результатов:
+
+GHCi> tst1 = Bi 10 20 (Un 30)
+GHCi> tst2 = Bi 1 2 (Bi 3 4 (Un 5))
+GHCi> do {x <- tst1; y <- tst2; return (x + y)}
+Bi 11 12 (Bi 13 14 (Bi 15 21 (Bi 22 23 (Bi 24 25 (Bi 31 32 (Bi 33 34 (Un 35)))))))
+GHCi> do {x <- tst2; y <- tst1; return (x + y)}
+Bi 11 21 (Bi 31 12 (Bi 22 32 (Bi 13 23 (Bi 33 14 (Bi 24 34 (Bi 15 25 (Un 35)))))))
+
+Функцию `fail` можно не реализовывать, полагаясь на реализацию по умолчанию.
+Реализуйте всё «честно», не сводя к стандартным спискам.
+--}
+
+instance Functor OddC where
+    fmap :: (a -> b) -> OddC a -> OddC b -- (Functor f)=>    (a -> b) -> f a -> f b -- infixl 4 <$>, fmap
+    fmap f (Un x) = Un (f x)
+    fmap f (Bi x y rest) = Bi (f x) (f y) (fmap f rest)
+
+instance Applicative OddC where
+    pure :: a -> OddC a
+    pure = Un
+
+    (<*>) :: OddC (a -> b) -> OddC a -> OddC b -- (Applicative f)=>  f (a -> b) -> f a -> f b -- infixl 4 <*>
+    (Un f) <*> xs = fmap f xs
+    (Bi f g restF) <*> xs = concat3OC fx gx restX where
+        fx = fmap f xs
+        gx = fmap g xs
+        restX = restF <*> xs
+
+instance Monad OddC where
+    (>>=) :: OddC a -> (a -> OddC b) -> OddC b -- (Monad m)=>  m a -> (a -> m b) -> m b -- infixl 1 >>=
+    (Un x) >>= k = k x
+    (Bi x y rest) >>= k = concat3OC kx ky kRest where
+        kx = k x
+        ky = k y
+        kRest = rest >>= k
+
+tst13 = Bi 10 20 (Un 30)
+tst23 = Bi 1 2 (Bi 3 4 (Un 5))
+test59 = do {x <- tst13; y <- tst23; return (x + y)} -- Bi 11 12 (Bi 13 14 (Bi 15 21 (Bi 22 23 (Bi 24 25 (Bi 31 32 (Bi 33 34 (Un 35)))))))
+test60 = do {x <- tst23; y <- tst13; return (x + y)} -- Bi 11 21 (Bi 31 12 (Bi 22 32 (Bi 13 23 (Bi 33 14 (Bi 24 34 (Bi 15 25 (Un 35)))))))
+
+{--
 instance Foldable OddC where
     -- (Foldable t, Monoid m)=>    (a -> m) -> t a -> m
     foldMap f (Un x) = f x
@@ -775,18 +858,3 @@ instance Traversable OddC  where
     sequenceA (Bi x y r) = liftA3 Bi x y (sequenceA r)
     -- sequenceA (Bi x y rest) = Bi <$> x <*> y <*> (sequenceA rest)
 --}
-
-instance Applicative OddC where
-    pure :: a -> OddC a
-    pure = undefined    
-    (<*>) :: OddC (a -> b) -> OddC a -> OddC b -- (Applicative f)=>  f (a -> b) -> f a -> f b -- infixl 4 <*>
-    (<*>) = undefined
-
-instance Monad OddC where
-    (>>=) :: OddC a -> (a -> OddC b) -> OddC b -- (Monad m)=>  m a -> (a -> m b) -> m b -- infixl 1 >>=
-    (>>=) = undefined
-
-tst1 = Bi 'a' 'b' (Un 'c') -- 
-tst2 = Bi 'd' 'e' (Bi 'f' 'g' (Un 'h'))
-tst3 = Bi 'i' 'j' (Un 'k')
-test56 = concat3OC tst1 tst2 tst3 -- Bi 'a' 'b' (Bi 'c' 'd' (Bi 'e' 'f' (Bi 'g' 'h' (Bi 'i' 'j' (Un 'k')))))

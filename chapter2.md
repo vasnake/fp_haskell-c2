@@ -65,8 +65,74 @@ traverse Identity = Identity -- identity law для траверс
 fmap (g1 . g2) = (fmap g1) . (fmap g2) -- закон композиции для функтора
 traverse $ Compose . (fmap g2) . g1 = Compose . (fmap $ traverse g2) . (traverse g1) -- закон композиции для траверс
 
+class (Applicative m)=> Monad m where
+    (>>=) :: m a -> (a -> m b) -> m b
+    return :: a -> m a
+    return = pure
+    (>>):: m a -> m b -> m b
+    m >> n = m >>= \_ -> n -- (>>) = (*>)
+    fail :: String -> m a -- deprecated, see MonadFail
+
+class (Monad m) => MonadFail m where
+    fail :: String -> m a
+
 ```
 definitions
+
+Пайплайн вычислений (с эффектами), направление пайплайна, Applicative vs Monad
+```hs
+Операторы "аппликации":
+
+-- функция, затем аргумент:
+($)     ::                      (a -> b) ->   a ->   b -- infixr 0 $
+(<$>)   :: Functor     f  =>    (a -> b) -> f a -> f b -- infixl 4 <$>, fmap
+(<*>)   :: Applicative f  =>  f (a -> b) -> f a -> f b -- infixl 4 <*>
+(=<<)   :: Monad       m  =>  (a -> m b) -> m a -> m b -- infixr 1 =<<
+
+-- аргумент, затем функция (через flip, за одним исключением - Applicative):
+(&)     ::                      a ->   (a -> b) ->   b -- infixl 1 &    -- Data.Function
+(<&>)   :: Functor     f  =>  f a ->   (a -> b) -> f b -- infixl 1 <&>  -- Control.Lens.Operators
+(<**>)  :: Applicative f  =>  f a -> f (a -> b) -> f b -- infixl 4 <**> -- Control.Applicative
+(>>=)   :: Monad       m  =>  m a -> (a -> m b) -> m b -- infixl 1 >>=
+
+Аппликативы и монады позволяют строить пайплайны вычислений с эффектами.
+
+Applicative vs Monad:
+В аппликативе структура вычислений более жестко фиксирована.
+В монаде дозволена большая гибкость при вычислениях, можно влиять на структуру контекста (на эффекты).
+Монада: значение предыдущего вычисления может влиять на структуру следующих вычислений
+
+(>>=)   :: Monad       m  =>  m a -> (a -> m b) -> m b -- infixl 1 >>=
+во время ее выполнения создается контекст,
+как итог, пайплайн связывает как вычисления, так и измениня контекста,
+что не работает для аппликатива
+
+(<*>)   :: Applicative f  =>  f (a -> b) -> f a -> f b -- infixl 4 <*>
+Согласно сигнатуре, аппликатив не может менять структуру контекста в процессе выполнения функции,
+контекст жестко определен вторым параметром.
+
+пайплайн в аппликативе списка
+ghci> (,) <$> [1 .. 3] <*> ['a' .. 'c']
+[
+    (1,'a'),(1,'b'),(1,'c'),
+    (2,'a'),(2,'b'),(2,'c'),
+    (3,'a'),(3,'b'),(3,'c')]
+
+пайплайн в монаде списка, результат идентичен
+ghci> do { a <- [1 .. 3]; b <- ['a' .. 'c']; return (a, b) }
+[(1,'a'),(1,'b'),(1,'c'),(2,'a'),(2,'b'),(2,'c'),(3,'a'),(3,'b'),(3,'c')]
+
+смотрите: вложенный цикл мы поменяли, он начинается со значения взятого из внешнего цикла
+в итоге поменялась структура - размер списка (влияем на эффект)
+попробуйте сделать это в аппликативе :)
+ghci> do { a <- [1 .. 3]; b <- [a .. 3]; return (a, b) }
+[
+    (1,1),(1,2),(1,3),
+    (2,2),(2,3),
+    (3,3)]
+
+```
+applicative vs monad
 
 ## chapter 2.1, Класс типов Foldable
 
@@ -2684,8 +2750,6 @@ repl
 ### 2.4.10 test
 
 ```hs
-https://stepik.org/lesson/28881/step/10?unit=9913
-TODO
 {--
 Для типа данных `OddC`
 (контейнер-последовательность, который по построению может содержать только нечетное число элементов)
@@ -2712,6 +2776,24 @@ concat3OC = undefined
 
 -- solution
 -- первая под-задача из трех частей комплексной задачи
+Имеем: рекурсивный тип данных, сум-тайп. Значит, будет рекурсия и паттерн матчинг.
+По сути, нужна перепаковка из трех контейнеров в один.
+Начинаем с базовых случаев паттерн-матчинга и видим, что через рекурсию решение получается в три строки.
+
+concat3OC :: OddC a -> OddC a -> OddC a -> OddC a
+concat3OC (Un x) (Un y) rest = Bi x y rest
+concat3OC (Un x) (Bi y1 y2 ys) rest = Bi x y1 (concat3OC (Un y2) ys rest)
+concat3OC (Bi x1 x2 xs) ys rest = Bi x1 x2 (concat3OC xs ys rest)
+
+-- alternatives
+
+concat3OC :: OddC a -> OddC a -> OddC a -> OddC a
+concat3OC (Un a) y z        = let (b, rest) = concat2OC y z in Bi a b rest
+concat3OC (Bi a b rest) y z = Bi a b $ concat3OC rest y z
+
+concat2OC::OddC a-> OddC a->(a, OddC a)
+concat2OC (Un a) x        = (a, x)
+concat2OC (Bi a b rest) x = let (c, t) = concat2OC rest x in (a, Bi b c t)
 
 ```
 test
@@ -2719,8 +2801,6 @@ test
 ### 2.4.11 test
 
 ```hs
-https://stepik.org/lesson/28881/step/11?unit=9913
-TODO
 {--
 Для типа данных
 
@@ -2747,6 +2827,30 @@ concatOC = undefined
 
 -- solution
 -- вторая под-задача из трех частей комплексной задачи
+-- используя функцию из предыдущей задачки -- изи
+
+concatOC :: OddC (OddC a) -> OddC a
+concatOC (Un xs) = xs
+concatOC (Bi xs ys zs) = concat3OC xs ys (concatOC zs)
+
+concat3OC :: OddC a -> OddC a -> OddC a -> OddC a
+concat3OC (Un x) (Un y) rest = Bi x y rest
+concat3OC (Un x) (Bi y1 y2 ys) rest = Bi x y1 (concat3OC (Un y2) ys rest)
+concat3OC (Bi x1 x2 xs) ys rest = Bi x1 x2 (concat3OC xs ys rest)
+
+-- alternatives
+
+concatOC :: OddC (OddC a) -> OddC a
+concatOC (Un x)        =       x
+concatOC (Bi a b rest) = concat3OC a b (concatOC rest)
+
+concat3OC :: OddC a -> OddC a -> OddC a -> OddC a
+concat3OC (Un a) y z        = let (b, rest) = concat2OC y z in Bi a b rest
+concat3OC (Bi a b rest) y z = Bi a b $ concat3OC rest y z
+
+concat2OC::OddC a-> OddC a->(a, OddC a)
+concat2OC (Un a) x        = (a, x)
+concat2OC (Bi a b rest) x = let (c, t) = concat2OC rest x in (a, Bi b c t)
 
 ```
 test
@@ -2754,8 +2858,6 @@ test
 ### 2.4.12 test
 
 ```hs
-https://stepik.org/lesson/28881/step/12?unit=9913
-TODO
 {--
 Сделайте тип данных
 
@@ -2780,15 +2882,122 @@ Bi 11 21 (Bi 31 12 (Bi 22 32 (Bi 13 23 (Bi 33 14 (Bi 24 34 (Bi 15 25 (Un 35)))))
 -- третья под-задача из трех частей комплексной задачи
 -- имея concat и fmap можно получить Monad
 
+instance Functor OddC where
+    -- fmap :: (a -> b) -> OddC a -> OddC b -- (Functor f)=>    (a -> b) -> f a -> f b -- infixl 4 <$>, fmap
+    fmap f (Un x) = Un (f x)
+    fmap f (Bi x y rest) = Bi (f x) (f y) (fmap f rest)
+
+instance Applicative OddC where
+    -- pure :: a -> OddC a
+    pure = Un
+
+    -- (<*>) :: OddC (a -> b) -> OddC a -> OddC b -- (Applicative f)=>  f (a -> b) -> f a -> f b -- infixl 4 <*>
+    (Un f) <*> xs = fmap f xs
+    (Bi f g restF) <*> xs = concat3OC fx gx restX where
+        fx = fmap f xs
+        gx = fmap g xs
+        restX = restF <*> xs
+
+instance Monad OddC where
+    -- (>>=) :: OddC a -> (a -> OddC b) -> OddC b -- (Monad m)=>  m a -> (a -> m b) -> m b -- infixl 1 >>=
+    (Un x) >>= k = k x
+    (Bi x y rest) >>= k = concat3OC kx ky kRest where
+        kx = k x
+        ky = k y
+        kRest = rest >>= k
+
+concat3OC :: OddC a -> OddC a -> OddC a -> OddC a
+concat3OC (Un x) (Un y) rest = Bi x y rest
+concat3OC (Un x) (Bi y1 y2 ys) rest = Bi x y1 (concat3OC (Un y2) ys rest)
+concat3OC (Bi x1 x2 xs) ys rest = Bi x1 x2 (concat3OC xs ys rest)
+
+-- alternatives
+
+import Control.Monad
+
+concat2OC::OddC a-> OddC a->(a, OddC a)
+concat2OC (Un a) x        = (a, x)
+concat2OC (Bi a b rest) x = let (c, t) = concat2OC rest x in (a, Bi b c t)
+
+concat3OC :: OddC a -> OddC a -> OddC a -> OddC a
+concat3OC (Un a) y z        = let (b, rest) = concat2OC y z in Bi a b rest
+concat3OC (Bi a b rest) y z = Bi a b $ concat3OC rest y z
+
+concatOC :: OddC (OddC a) -> OddC a
+concatOC (Un x)        =       x
+concatOC (Bi a b rest) = concat3OC a b (concatOC rest)
+
+instance Functor OddC where
+  fmap f (Un x)        = Un (f x)
+  fmap f (Bi x y rest) = Bi (f x) (f y) $ fmap f rest
+
+instance Applicative OddC where
+  pure = return
+  (<*>) = ap
+
+instance Monad OddC where
+  return = Un
+  (>>=) = flip $ (concatOC .) . fmap
+
+---------------------------------------------------------------------------------------
+instance Functor OddC where
+  fmap f (Un x) = Un (f x)
+  fmap f (Bi x1 x2 r) = Bi (f x1) (f x2) (fmap f r)
+
+instance Applicative OddC where
+  pure x = Un x
+  Un f <*> xs = fmap f xs
+  Bi f1 f2 r <*> xs = concat3OC (fmap f1 xs) (fmap f2 xs) (r <*> xs)
+
+instance Monad OddC where
+  xs >>= k = concatOC (fmap k xs)
+
+concatOC :: OddC (OddC a) -> OddC a
+concatOC (Un xs) = xs
+concatOC (Bi xs ys (Un zs)) = concat3OC xs ys zs
+concatOC (Bi xs ys (Bi zs1 zs2 r)) = concat3OC xs ys (concat3OC zs1 zs2 (concatOC r))
+
+concat3OC :: OddC a -> OddC a -> OddC a -> OddC a
+concat3OC xs (Un y) zs = concat2OC xs y zs
+concat3OC xs (Bi y1 y2 ys) zs = concat2OC xs y1 (concat3OC (Un y2) ys zs)
+
+concat2OC :: OddC a -> a -> OddC a -> OddC a
+concat2OC (Un x) y zs = Bi x y zs
+concat2OC (Bi x1 x2 xs) y zs = Bi x1 x2 (concat2OC xs y zs)
+
+-------------------------------------------------------------------------------------------
+
+import Control.Monad
+
+concat3OC :: OddC a -> OddC a -> OddC a -> OddC a
+concat3OC (Bi a b c) y z = Bi a b (concat3OC c y z)
+concat3OC (Un x) (Bi a b c) z = Bi x a (concat3OC (Un b) c z)
+concat3OC (Un x) (Un y) z = Bi x y z
+
+concatOC :: OddC (OddC a) -> OddC a
+concatOC (Un a) = a
+concatOC (Bi a b c) = concat3OC a b $ concatOC c
+
+instance Functor OddC where
+  fmap f (Un a) = Un $ f a
+  fmap f (Bi a b c) = Bi (f a) (f b) (fmap f c)
+
+instance Applicative OddC where
+  pure = Un
+  (<*>) = ap
+
+instance Monad OddC where
+  (>>=) x f = concatOC $ f <$> x
+
 ```
 test
 
 ### 2.4.13 Monad vs MonadFail
 
-Monad fail
+`Monad` `fail`
 это "протечка абстракции", эта функция пользователем не вызывается,
 это ручка для подстановки своей реализации для случая облома пар.мат.
-внутри bind, когда лямбда ломается.
+внутри `bind`, когда лямбда ломается.
 ```hs
 -- Где возникает необходимость в fail
 
@@ -2961,6 +3170,8 @@ and while the MonadPlus and Alternative instances for a type should be related,
 the Monoid may be (and sometimes is) something completely different.
 https://stackoverflow.com/a/10168111
 
+### 2.5.5 test
+
 ```hs
 https://stepik.org/lesson/30721/step/5?unit=11244
 TODO
@@ -2987,6 +3198,8 @@ TODO
 
 ```
 test
+
+### 2.5.6 test
 
 ```hs
 https://stepik.org/lesson/30721/step/6?unit=11244
@@ -3030,6 +3243,8 @@ Select all correct options from the list
 
 ```
 test
+
+### 2.5.7 test
 
 ```hs
 https://stepik.org/lesson/30721/step/7?unit=11244
@@ -3075,6 +3290,8 @@ satisfyEP = undefined
 ```
 test
 
+### 2.5.8 test
+
 ```hs
 https://stepik.org/lesson/30721/step/8?unit=11244
 TODO
@@ -3106,6 +3323,8 @@ Left "pos 2: unexpected end of input"
 
 ```
 test
+
+### 2.5.9 test
 
 ```hs
 https://stepik.org/lesson/30721/step/9?unit=11244
