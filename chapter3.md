@@ -46,9 +46,9 @@ instance Applicative (Except e) where
 ```
 repl
 
+### 3.1.3 test
+
 ```hs
-https://stepik.org/lesson/30722/step/3?unit=11809
-TODO
 {--
 Реализуйте функцию 
 
@@ -60,6 +60,20 @@ withExcept :: (e -> e') -> Except e a -> Except e' a
 withExcept = undefined
 
 -- solution
+
+withExcept :: (e -> e') -> Except e a -> Except e' a
+withExcept f (Except (Left e)) = except $ Left (f e)
+withExcept _ (Except (Right a)) = except $ Right a
+
+-- alternatives
+
+import           Control.Arrow
+withExcept :: (e -> e') -> Except e a -> Except e' a
+withExcept  f =  Except . left f . runExcept
+
+import Data.Bifunctor
+withExcept :: (e -> e') -> Except e a -> Except e' a
+withExcept f (Except either) = (Except (first f either))
 
 ```
 test
@@ -131,9 +145,9 @@ Right "ErrZero \"5.0/0;\"" -- right, факт ошибки спрятан
 ```
 repl
 
+### 3.1.7 test
+
 ```hs
-https://stepik.org/lesson/30722/step/7?unit=11809
-TODO
 {--
 В модуле `Control.Monad.Trans.Except` библиотеки `transformers` 
 имеется реализация монады `Except` 
@@ -143,8 +157,7 @@ TODO
 
 Введём тип данных для представления ошибки обращения к списку по недопустимому индексу:
 
-data ListIndexError = ErrIndexTooLarge Int | ErrNegativeIndex 
-  deriving (Eq, Show)
+data ListIndexError = ErrIndexTooLarge Int | ErrNegativeIndex deriving (Eq, Show)
 
 Реализуйте оператор `!!!` доступа к элементам массива по индексу, 
 отличающийся от стандартного `(!!)` поведением в исключительных ситуациях. 
@@ -169,8 +182,45 @@ infixl 9 !!!
 -- solution
 -- на бесконечном списке работает (должно)
 
+data ListIndexError = ErrIndexTooLarge Int | ErrNegativeIndex deriving (Eq, Show)
+import qualified Control.Monad.Trans.Except as TE
+infixl 9 !!!
+(!!!) :: [a] -> Int -> TE.Except ListIndexError a
+(!!!) lst idx
+    | idx < 0 = TE.except (Left ErrNegativeIndex)
+    | otherwise = case (lst !? idx) of
+        Just x -> TE.except (Right $ lst !! idx)
+        Nothing -> TE.except (Left $ ErrIndexTooLarge idx)
+-- | idx >= (length lst) = TE.except (Left $ ErrIndexTooLarge idx) -- no infinity here
+xs !? n
+  | n < 0     = Nothing
+  | otherwise = foldr (\x r k -> case k of
+                                   0 -> Just x
+                                   _ -> r (k-1)) (const Nothing) xs n
+
+-- alternatives
+
+(!!!) xs n | n < 0 = throwE $ ErrNegativeIndex
+           | null xs' = throwE $ ErrIndexTooLarge n
+           | otherwise = return (head xs')
+    where xs' = drop n xs
+
+(!!!) _ i | i < 0 = throwE $ ErrNegativeIndex
+(!!!) xs n = go xs n 
+  where
+    go [] _ = throwE $ ErrIndexTooLarge n
+    go (x : xs) 0 = pure x
+    go (x : xs) i = go xs (i - 1)
+
+(!!!) l i | i < 0 = throwError ErrNegativeIndex
+          | otherwise = foldr search tooLarge $ zip [0..] l where
+            tooLarge = throwError $ ErrIndexTooLarge i
+            search (j, x) next = if  i == j then return x else next
+
 ```
 test
+
+### 3.1.8 test
 
 ```hs
 https://stepik.org/lesson/30722/step/8?unit=11809

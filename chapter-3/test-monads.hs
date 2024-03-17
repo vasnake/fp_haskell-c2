@@ -1,10 +1,13 @@
--- {-# LANGUAGE TypeOperators #-} -- для разрешения `|.|` в качестве имени оператора над типами
--- {-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE InstanceSigs #-} -- позволяет писать сигнатуры для инстансов
+-- {-# LANGUAGE TypeOperators #-} -- для разрешения `|.|` в качестве имени оператора над типами
+-- {-# LANGUAGE FunctionalDependencies #-}
+-- {-# LANGUAGE MultiParamTypeClasses #-}
+-- {-# LANGUAGE PolyKinds #-}
 
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 {-# OPTIONS_GHC -Wno-noncanonical-monad-instances #-}
 {-# OPTIONS_GHC -Wno-noncanonical-monoid-instances #-}
+{-# OPTIONS_GHC -Wno-typed-holes #-}
 
 {-# HLINT ignore "Use traverse_" #-}
 {-# HLINT ignore "Use sum" #-}
@@ -22,6 +25,7 @@ module TestMonads where
 import Text.Parsec ( getParserState )
 import Data.Char ( toLower, toUpper )
 import Data.Function ( (&) )
+import Data.List ( (++), map, (!!), head, tail, )
 
 import Data.Monoid (
     Sum(..), Product(..), Endo(..), appEndo, (<>), Dual(..), First(..)
@@ -55,6 +59,7 @@ import Control.Monad ( liftM, mplus, guard, mfilter, ap, guard, MonadPlus(..), w
 import Control.Monad.Trans.Writer ( runWriter, tell, Writer )
 -- import Control.Monad.Trans ( lift )
 import Control.Monad.Trans.Class
+import qualified Control.Monad.Trans.Except as TE
 
 -- import GHC.Show (Show)
 -- import GHC.Base (Eq)
@@ -63,7 +68,7 @@ import Prelude (
     (==), (*), id, const, Maybe(..), null, ($), succ, (.), undefined, Num(..), Show, Eq,
     foldr, foldl, Either(..), Monoid(..), Semigroup(..), putStrLn, print, (*), (>), (/), (^),
     map, (=<<), (>>=), return, flip, (++), fail, Ord(..), (>>), take, Monad(..),
-    Double, either, Integer, head, tail, IO(..)
+    Double, either, Integer, head, tail, IO(..),
     )
 
 newtype Except e a = Except { runExcept :: Either e a } deriving Show
@@ -369,3 +374,73 @@ asks f = ReaderT (return . f) -- внутренняя монада требуе�
 local :: (r -> r) -> ReaderT r m a -> ReaderT r m a
 local f rma = ReaderT ((runReaderT rma) . f) -- так как ридер это функция, имееем композицию функций
 -- следует помнить, енв прокидывается в разные вычисления независимо (см. пример)
+
+
+{--
+Реализуйте функцию 
+
+withExcept :: (e -> e') -> Except e a -> Except e' a
+
+позволящую, если произошла ошибка, применить к ней заданное преобразование.
+--}
+withExcept :: (e -> e') -> Except e a -> Except e' a
+withExcept f (Except (Left e)) = except $ Left (f e)
+withExcept _ (Except (Right a)) = except $ Right a
+
+-- newtype Except e a = Except { runExcept :: Either e a } deriving Show
+-- except :: Either e a -> Except e a
+-- except = Except
+
+
+
+{--
+В модуле `Control.Monad.Trans.Except` библиотеки `transformers` 
+имеется реализация монады `Except` 
+с интерфейсом, идентичным представленному в видео-степах, но с более общими типами. 
+Мы изучим эти типы в следующих модулях, однако 
+использовать монаду `Except` из библиотеки `transformers` мы можем уже сейчас.
+
+Введём тип данных для представления ошибки обращения к списку по недопустимому индексу:
+
+data ListIndexError = ErrIndexTooLarge Int | ErrNegativeIndex deriving (Eq, Show)
+
+Реализуйте оператор `!!!` доступа к элементам массива по индексу, 
+отличающийся от стандартного `(!!)` поведением в исключительных ситуациях. 
+В этих ситуациях он должен выбрасывать подходящее исключение типа `ListIndexError`
+
+(!!!) :: [a] -> Int -> Except ListIndexError a 
+
+GHCi> runExcept $ [1..100] !!! 5
+Right 6
+GHCi> (!!!!) xs n = runExcept $ xs !!! n
+GHCi> [1,2,3] !!!! 0
+Right 1
+GHCi> [1,2,3] !!!! 42
+Left (ErrIndexTooLarge 42)
+GHCi> [1,2,3] !!!! (-3)
+Left ErrNegativeIndex
+--}
+
+-- import qualified Control.Monad.Trans.Except as TE
+data ListIndexError = ErrIndexTooLarge Int | ErrNegativeIndex deriving (Eq, Show)
+infixl 9 !!!
+(!!!) :: [a] -> Int -> TE.Except ListIndexError a
+(!!!) lst idx
+    | idx < 0 = TE.except (Left ErrNegativeIndex)
+    | otherwise = case (lst !? idx) of
+        Just x -> TE.except (Right $ lst !! idx)
+        Nothing -> TE.except (Left $ ErrIndexTooLarge idx)
+-- | idx >= (length lst) = TE.except (Left $ ErrIndexTooLarge idx) -- no infinity here
+
+(!?) :: (Ord a, Num a, Foldable t) => t b -> a -> Maybe b
+xs !? n
+  | n < 0     = Nothing
+  | otherwise = foldr (\x r k -> case k of
+                                   0 -> Just x
+                                   _ -> r (k-1)) (const Nothing) xs n
+
+(!!!!) xs n = TE.runExcept $ xs !!! n
+test3 = TE.runExcept $ [1..100] !!! 5 -- Right 6
+test4 = [1,2,3] !!!! 0 -- Right 1
+test5 = [1,2,3] !!!! 42 -- Left (ErrIndexTooLarge 42)
+test6 = [1,2,3] !!!! (-3) -- Left ErrNegativeIndex
