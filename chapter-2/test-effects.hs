@@ -20,10 +20,14 @@
 {-# HLINT ignore "Fuse foldMap/map" #-}
 {-# HLINT ignore "Use <$>" #-}
 {-# HLINT ignore "Use :" #-}
+{-# HLINT ignore "Redundant lambda" #-}
+{-# HLINT ignore "Avoid lambda" #-}
+{-# HLINT ignore "Use const" #-}
 
 module TestEffects where
 
 import Text.Parsec (getParserState)
+import Text.Printf ( printf )
 import Data.Char ( toLower, isDigit, )
 import Data.Function ( (&), )
 
@@ -39,6 +43,7 @@ import Data.Functor ((<&>))
 
 import Control.Applicative (
     Applicative(..), (<*>), (<$>), ZipList(..), (<**>), (<|>), liftA3, liftA2,
+    Alternative(..),
     )
 
 import Data.Foldable (
@@ -59,7 +64,7 @@ import Prelude (
     foldr, foldl, Either(..), Monoid(..), Semigroup(..), putStrLn, print, (*), (>), (/), (^),
     map, (=<<), (>>=), return, flip, (++), fail, Ord(..), (>>), take,
     even, Bool(..), odd,
-    Monad(..),
+    Monad(..), snd,
     )
 
 test = foldr (+) 0 [0..42]
@@ -691,6 +696,7 @@ Left "unexpected C"
 GHCi> runPrsE (do {a <- charE 'A'; b <- charE 'B'; return (a,b)}) "BCD"
 Left "unexpected B"
 --}
+
 newtype PrsE a = PrsE { runPrsE :: String -> Either String (a, String) }
 instance Monad PrsE where
   (>>=) :: PrsE a -> (a -> PrsE b) -> PrsE b
@@ -903,41 +909,330 @@ class (Alternative m, Monad m)=> MonadPlus m where
 Покажите выполняемость законов.
 Если нет, то приведите контрпример, если да, то доказательство
 
-Applicative Maybe
-- (u <|> v) <*> w       =    u <*> w <|> v <*> w: выполняется, доказательство опирается на реализацию операторов <|> <*>
+Нет контрпримеров, законы выполняются,
+доказательство опирается на реализацию операторов <|> <*>
+
+- (u <|> v) <*> w       =    u <*> w <|> v <*> w
 (n | n) * _ = n             (n * _ ) | (n * _) = n
 (_ | _) * n = n             (_ * n) | (_ * n) = n
 (j1 | _) * j = j1           (j1 * j) | (_ * j) = j1
 (n | j2) * j = j2           (n * j) | (j2 * j) = j2
 
-- (u `mplus` v) >>= k   =    (u >>= k) `mplus` (v >>= k): выполняется, доказательство опирается на реализацию операторов <|> >>=
-(u | v) >>= k   =    (u >>= k) | (v >>= k)
+- (u `mplus` v) >>= k   =    (u >>= k) `mplus` (v >>= k)
+(u | v) >>= k   =       (u >>= k) | (v >>= k)
 (n | n) > k = n         (n > k) | (n > k) = n
 (j | _) > k = kj        (j > k) | (_ > k) = kj
 (n | j) > k = kj        (n > k) | (j > k) = kj
-
-Alternative Maybe
-- (u <|> v) <*> w       =    u <*> w <|> v <*> w
-- (u `mplus` v) >>= k   =    (u >>= k) `mplus` (v >>= k)
-
-Monad Maybe
-- (u <|> v) <*> w       =    u <*> w <|> v <*> w
-- (u `mplus` v) >>= k   =    (u >>= k) `mplus` (v >>= k)
-
-MonadPlus Maybe
-- (u <|> v) <*> w       =    u <*> w <|> v <*> w
-- (u `mplus` v) >>= k   =    (u >>= k) `mplus` (v >>= k)
-
-ghci> :i (<|>)
-  (<|>) :: f a -> f a -> f a -- infixl 3 <|>
-ghci> :i (<*>)
-  (<*>) :: f (a -> b) -> f a -> f b -- infixl 4 <*>
-
 --}
 mj = Just 42
 mn = Nothing
 mjf = Just (+7)
+kj = \x -> Just x
+kn = \x -> Nothing
 
 test61 = (mjf <|> mn) <*> mj -- первый непустой ап х, 
 test62 = (mjf <*> mj) <|> (mn <*> mj) -- первый непустой из двух ап
+test63 = ((mj `mplus` mn) >>= kj) == ((mj >>= kj) `mplus` (mn >>= kj))
 
+-- Comment from teacher
+{--
+Comment from teacher
+
+Докажем, что закон для Alternative выполняется. Для этого переберем различные варианты значений uu и ww.
+
+Пожалуйста, обратите внимание, что перебор вариантов можно осуществлять и в другом порядке; главное — чтобы были покрыты все возможные случаи.
+
+1. u = Nothing
+ 
+ (Nothing <|> v) <*> w ≡ v <*> w                        -- def (<|>)
+ 
+ (Nothing <*> w) <|> (v <*> w) ≡ Nothing <|> (v <*> w)  -- def (<*>)
+                               ≡ v <*> w                -- def (<|>)
+
+2. u = Just f
+ 
+ 2.1. w = Nothing
+   
+  (Just f <|> v) <*> Nothing ≡ Just f <*> Nothing                 -- def (<|>)
+                             ≡ Nothing                            -- def (<*>)
+  
+  (Just f <*> Nothing) <|> (v <*> Nothing) ≡ Nothing <|> Nothing  -- def (<*>)
+                                           ≡ Nothing              -- def (<|>)
+ 
+ 2.2. w = Just x
+  
+  (Just f <|> v) <*> Just x ≡ Just f <*> Just x                           -- def (<|>)
+                            ≡ Just (f x)                                  -- def (<*>)
+  
+  (Just f <*> Just x) <|> (v <*> Just x) ≡ Just (f x) <|> (v <*> Just x)  -- def (<*>)
+                                         ≡ Just (f x)                     -- def (<|>)
+
+Закон для MonadPlus не выполняется.
+
+Разумеется, контрпример может быть и другим. Пожалуйста, проверьте сами его корректность в GHCi.
+
+GHCi> u = Just True
+GHCi> v = Just False
+GHCi> k = \b -> if b then Nothing else Just "!"
+
+GHCi> (u `mplus` v) >>= k
+Nothing
+
+GHCi> (u >>= k) `mplus` (v >>= k)
+Just "!"
+--}
+
+
+{--
+Реализуем улучшенную версию парсера PrsE
+
+newtype PrsEP a = PrsEP { runPrsEP :: Int -> String -> (Int, Either String (a, String)) }
+parseEP :: PrsEP a -> String -> Either String (a, String)
+parseEP p  = snd . runPrsEP p 0
+
+Этот парсер получил дополнительный целочисленный параметр в аргументе и в возвращаемом значении. 
+С помощью этого параметра мы сможем отслеживать и передвигать текущую позицию в разбираемой строке и 
+сообщать о ней пользователю в случае ошибки:
+
+GHCi> charEP c = satisfyEP (== c)
+GHCi> runPrsEP (charEP 'A') 0 "ABC"
+(1,Right ('A',"BC"))
+> runPrsEP (charEP 'A') 41 "BCD"
+(42,Left "pos 42: unexpected B")
+> runPrsEP (charEP 'A') 41 ""
+(42,Left "pos 42: unexpected end of input")
+
+Вспомогательная функция `parseEP` дает возможность вызывать парсер более удобным образом 
+по сравнению с `runPrsEP`, скрывая технические детали:
+
+GHCi> parseEP (charEP 'A') "ABC"
+Right ('A',"BC")
+GHCi> parseEP (charEP 'A') "BCD"
+Left "pos 1: unexpected B"
+GHCi> parseEP (charEP 'A') ""
+Left "pos 1: unexpected end of input"
+
+Реализуйте функцию 
+satisfyEP :: (Char -> Bool) -> PrsEP Char
+обеспечивающую описанное выше поведение.
+--}
+
+{-- ранее уже делали
+
+newtype PrsE a = PrsE { runPrsE :: String -> Either String (a, String) }
+
+instance Functor PrsE where
+  fmap :: (a -> b) -> PrsE a -> PrsE b
+  fmap a2b (PrsE parsA) = PrsE parsB where
+    parsB str = do -- either monad
+        (a, rest) <- parsA str
+        return (a2b a, rest)
+
+instance Applicative PrsE where
+  pure :: a -> PrsE a
+  pure a = PrsE (\s -> return (a, s))
+
+  (<*>) :: PrsE (a -> b) -> PrsE a -> PrsE b
+  (PrsE parsA2b) <*> (PrsE parsA) = PrsE parsB where
+    parsB str = do -- either monad
+        (a2b, s1) <- parsA2b str -- left
+        (a, s2) <- parsA s1 -- right
+        return (a2b a, s2) -- combine
+
+instance Monad PrsE where
+  (>>=) :: PrsE a -> (a -> PrsE b) -> PrsE b
+  (PrsE a) >>= k = PrsE b where
+    b str = do -- either monad
+        (x1, s1) <- a str -- left
+        (x2, s2) <- runPrsE (k x1) s1 -- right
+        return (x2, s2)
+
+charE :: Char -> PrsE Char
+charE c = satisfyE (== c)
+
+satisfyE :: (Char -> Bool) -> PrsE Char
+satisfyE pred = PrsE fun where
+    fun "" = Left "unexpected end of input"
+    fun (c:cs) = if pred c then Right (c, cs) else Left ("unexpected " ++ [c])
+
+--}
+
+newtype PrsEP a = PrsEP { runPrsEP :: Int -> String -> (Int, Either String (a, String)) }
+
+satisfyEP :: (Char -> Bool) -> PrsEP Char
+satisfyEP pred = PrsEP $ \ pos str -> 
+    let
+        nextPos = pos + 1
+        msg s = "pos " ++ show nextPos ++ ": unexpected " ++ s
+    in case str of
+        ""      -> (nextPos, Left $ msg "end of input")
+        (c:cs)  -> if pred c then (nextPos, Right (c, cs)) else (nextPos, Left $ msg [c])
+
+{--
+satisfyEP pred = PrsEP fun where
+    fun prevPos "" = (pos, Left $ msg "end of input") where
+        pos = prevPos + 1
+        msg s = "pos " ++ show pos ++ ": unexpected " ++ s
+    fun prevPos (c:cs) = if pred c
+        then (pos, Right (c, cs))
+        else (pos, Left $ msg [c]) where
+            pos = prevPos + 1
+            msg s = "pos " ++ show pos ++ ": unexpected " ++ s
+--}
+
+parseEP :: PrsEP a -> String -> Either String (a, String)
+parseEP p  = snd . runPrsEP p 0
+
+charEP c = satisfyEP (== c)
+
+test64 = runPrsEP (charEP 'A') 0 "ABC" -- (1,Right ('A',"BC"))
+test65 = runPrsEP (charEP 'A') 41 "BCD" -- (42,Left "pos 42: unexpected B")
+test66 = runPrsEP (charEP 'A') 41 "" -- (42,Left "pos 42: unexpected end of input")
+
+
+{--
+Сделайте парсер
+
+newtype PrsEP a = PrsEP { runPrsEP :: Int -> String -> (Int, Either String (a, String)) }
+parseEP :: PrsEP a -> String -> Either String (a, String)
+parseEP p  = snd . runPrsEP p 0
+
+представителем классов типов `Functor` и `Applicative`, обеспечив следующее поведение:
+
+GHCi> runPrsEP (pure 42) 0 "ABCDEFG"
+(0,Right (42,"ABCDEFG"))
+GHCi> charEP c = satisfyEP (== c)
+GHCi> anyEP = satisfyEP (const True)
+GHCi> testP = (,) <$> anyEP <* charEP 'B' <*> anyEP
+GHCi> runPrsEP testP 0 "ABCDE"
+(3,Right (('A','C'),"DE"))
+GHCi> parseEP testP "BCDE"
+Left "pos 2: unexpected C"
+GHCi> parseEP testP ""
+Left "pos 1: unexpected end of input"
+GHCi> parseEP testP "B"
+Left "pos 2: unexpected end of input"
+--}
+
+-- newtype PrsEP a = PrsEP { runPrsEP :: Int -> String -> (Int, Either String (a, String)) }
+-- parseEP :: PrsEP a -> String -> Either String (a, String)
+-- parseEP p  = snd . runPrsEP p 0
+-- charEP c = satisfyEP (== c)
+
+instance Functor PrsEP where
+  fmap :: (a -> b) -> PrsEP a -> PrsEP b
+  fmap f (PrsEP pars) = PrsEP $ \ pos str ->
+    let 
+        (newPos, parsRes) = pars pos str
+        newParsRes = do { (a, s) <- parsRes; return (f a, s) }
+    in (newPos, newParsRes)
+
+instance Applicative PrsEP where
+  pure :: a -> PrsEP a
+  pure a = PrsEP $ \ pos str -> (pos, return (a, str))
+
+  (<*>) :: PrsEP (a -> b) -> PrsEP a -> PrsEP b
+  (PrsEP fs) <*> (PrsEP ps) = PrsEP $ \ pos str -> 
+    let
+        (pos1, res1) = fs pos str -- left parser
+        result = do
+            (f, s1) <- res1
+            let (pos2, res2) = ps pos1 s1 -- right parser
+            (a, s2) <- res2
+            return (pos2, (f a, s2))
+    in case result of
+        Left msg -> (pos1, Left msg)
+        Right (pos2, pair) -> (pos2, Right pair)
+
+anyEP = satisfyEP (const True)
+testP = (,) <$> anyEP <* charEP 'B' <*> anyEP
+test67 = runPrsEP (pure 42) 0 "ABCDEFG" -- (0,Right (42,"ABCDEFG"))
+test68 = runPrsEP testP 0 "ABCDE" -- (3,Right (('A','C'),"DE"))
+test69 = parseEP testP "BCDE" -- Left "pos 2: unexpected C"
+test70 = parseEP testP "" -- Left "pos 1: unexpected end of input"
+test71 = parseEP testP "B" -- Left "pos 2: unexpected end of input"
+
+instance Monad PrsEP where
+    (>>=) :: PrsEP a -> (a -> PrsEP b) -> PrsEP b
+    (PrsEP a) >>= f = PrsEP fun where
+        fun n s = res2 where
+            (n1, res1) = a n s -- left
+            res2 = case res1 of
+                Left msg -> (n1, Left msg)
+                Right (x, s1) -> runPrsEP (f x) n1 s1
+
+
+{--
+Сделайте парсер
+
+newtype PrsEP a = PrsEP { runPrsEP :: Int -> String -> (Int, Either String (a, String)) }
+parseEP :: PrsEP a -> String -> Either String (a, String)
+parseEP p  = snd . runPrsEP p 0
+
+представителем класса типов `Alternative`, 
+обеспечив следующее поведение для пары неудачных альтернатив: 
+сообщение об ошибке возвращается из той альтернативы, которой удалось распарсить входную строку глубже.
+
+GHCi> runPrsEP empty 0 "ABCDEFG"
+(0,Left "pos 0: empty alternative")
+GHCi> charEP c = satisfyEP (== c)
+GHCi> tripleP [a,b,c] = (\x y z -> [x,y,z]) <$> charEP a <*> charEP b <*>  charEP c
+GHCi> parseEP (tripleP "ABC" <|> tripleP "ADC") "ABE"
+Left "pos 3: unexpected E"
+GHCi> parseEP (tripleP "ABC" <|> tripleP "ADC") "ADE"
+Left "pos 3: unexpected E"
+GHCi> parseEP (tripleP "ABC" <|> tripleP "ADC") "AEF"
+Left "pos 2: unexpected E"
+--}
+
+-- import Text.Printf ( printf )
+-- import Control.Applicative ( Alternative(..) )
+instance Alternative PrsEP where
+    empty :: PrsEP a
+    empty = PrsEP (\i s -> (i, Left $ printf "pos %d: empty alternative" i))
+
+    (<|>) :: PrsEP a -> PrsEP a -> PrsEP a -- при выборе из двух Left выбрать тот, где позиция дальше
+    l <|> r = PrsEP $ \ pos str ->
+        case runPrsEP l pos str of
+            (n1, Right x) -> (n1, Right x)
+            (n1, Left msg1) -> case runPrsEP r pos str of
+                (n2, Right x) -> (n2, Right x)
+                (n2, Left msg2) -> if n1 > n2 then (n1, Left msg1) else (n2, Left msg2)
+
+-- charEP c = satisfyEP (== c) 
+tripleP [a,b,c] = (\x y z -> [x,y,z]) <$> charEP a <*> charEP b <*>  charEP c
+test72 = runPrsEP empty 0 "ABCDEFG" -- (0,Left "pos 0: empty alternative")
+test74 = parseEP (tripleP "ABC" <|> tripleP "ADC") "ABE" -- Left "pos 3: unexpected E"
+test75 = parseEP (tripleP "ABC" <|> tripleP "ADC") "ADE" -- Left "pos 3: unexpected E"
+test76 = parseEP (tripleP "ABC" <|> tripleP "ADC") "AEF" --Left "pos 2: unexpected E"
+
+{--
+instance Applicative PrsEP where
+    pure x = PrsEP $ \ i s -> (i, Right (x, s))
+    pf <*> px = PrsEP $ \ i s -> case runPrsEP pf i s of
+                (n, Left e) -> (n, Left e)
+                (n, Right (f, s1)) -> runPrsEP (f <$> px) n s1
+
+class (Applicative f) => Alternative f where -- расширим аппликатив
+    empty :: f a -- нейтраль, похоже на моноидальный mempty, но это "нейтральный контекст", без конкретного значения
+    (<|>) :: f a -> f a -> f a -- ассоциативная операция, сигнатура как моноид mappend, не так ли? 
+
+instance Alternative Parser where
+    empty :: Parser a
+    empty = Parser f where -- парсер это функция, стрелка
+        f _ = [] -- результат работы парсера это список пар, пустой список это empty
+    (<|>) :: Parser a -> Parser a -> Parser a
+    p <|> q = Parser f where -- левый или правый-если-левый-сломан
+        f s = let ps = apply p s in -- применим левый парсер
+        if null ps -- и проверим результат: список пустой?
+            then apply q s
+            else ps
+
+Семантика applied over `<*>` в парсере: применить левый парсер к входной строке, на хвосте применить правый парсер;
+левую функцию применить к результату правого парсера.
+
+Хотим в наш Parser добавить семантику "альтернативы" (обработка ошибок).
+Семантика alternative `<|>` в парсере: применить левый, если успешно, то это и есть результат;
+иначе применить правый и вернуть его результат.
+
+--}

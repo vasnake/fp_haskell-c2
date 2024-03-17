@@ -76,6 +76,44 @@ class (Applicative m)=> Monad m where
 class (Monad m) => MonadFail m where
     fail :: String -> m a
 
+-- Alternative vs MonadPlus
+
+class (Applicative f) => Alternative f where -- интерфейс моноидальной структуры
+    empty :: f a -- нейтральный элемент
+    (<|>) :: f a -> f a -> f a -- ассоциативная бинарная операция
+
+class (Alternative m, Monad m)=> MonadPlus m where
+    mzero :: m a
+    mzero = empty
+    mplus :: m a -> m a -> m a
+    mplus = (<|>)
+
+-- альтернатива для мейби это First реализация моноида: из цепочки выходит первый не-пустой
+instance Alternative Maybe where -- n.b. наложить ограничение на `a` мы не можем, класс не позволяет добавить параметр `a`
+    empty = Nothing
+    Nothing <|> r = r
+    l <|> _ = l
+
+instance MonadPlus Maybe -- дефолтная реализация закрывает наши нужды
+
+instance Alternative [] where -- реализация альтернативы для списка (повторяет поведение моноида для списка)
+    empty = []
+    (<|>) = (++) -- список позволяет комбинировать: склеить два списка
+
+-- теперь добавляется
+instance MonadPlus []
+
+MonadPlus это монада с добавленным моноидным поведением (контейнера). Набор законов это отражает
+
+-- 1. Left Zero: mzero >>= k = mzero -- похоже на аппликативный закон: empty <*> a = empty
+-- 2. Right Zero: v >> mzero = v
+
+-- вот эти законы выполняются не для всех инстансов монадплюс:
+-- другими словами: должен выполняться хотя бы один из этих двух законов
+
+-- 3. Left Distribution: (a `mplus` b) >>= k = (a >>= k) `mplus` (b >>= k)
+-- 4. Left Catch Law: (return a) `mplus` b = return a
+
 ```
 definitions
 
@@ -3177,17 +3215,14 @@ https://stackoverflow.com/a/10168111
 ### 2.5.5 test
 
 ```hs
-https://stepik.org/lesson/30721/step/5?unit=11244
-TODO
 {--
 Выполняются ли для стандартных представителей 
 `Applicative`, `Alternative`, `Monad` и `MonadPlus` 
 типа данных `Maybe` 
 следующие законы дистрибутивности: 
 
-(u <|> v) <*> w       =    u <*> w <|> v <*> w
-
-(u `mplus` v) >>= k   =    (u >>= k) `mplus` (v >>= k)
+- (u <|> v) <*> w       =    u <*> w <|> v <*> w
+- (u `mplus` v) >>= k   =    (u >>= k) `mplus` (v >>= k)
 
 Если нет, то приведите контрпример, если да, то доказательство.
 Предполагается, что расходимости отсутствуют.
@@ -3199,6 +3234,54 @@ TODO
 - Get points, max score is 3 points 
 
 -- solution
+Я не решил, терпения не хватило.
+Задачка на прояснение разницы между аппликативом и монадой.
+Разница в том, что в монаде, в стрелке Клейсли, мы можем проанализировать значение из
+предыдущего шага пайплайна и поменять "контейнер". И тут закон ломается.
+Для аппликатива закон выполняется, там симметрично.
+
+-- Comment from teacher
+Докажем, что закон для Alternative выполняется. Для этого переберем различные варианты значений uu и ww.
+Пожалуйста, обратите внимание, что перебор вариантов можно осуществлять и в другом порядке; 
+главное — чтобы были покрыты все возможные случаи.
+
+1. u = Nothing
+ 
+ (Nothing <|> v) <*> w ≡ v <*> w                        -- def (<|>)
+ 
+ (Nothing <*> w) <|> (v <*> w) ≡ Nothing <|> (v <*> w)  -- def (<*>)
+                               ≡ v <*> w                -- def (<|>)
+
+2. u = Just f
+ 
+ 2.1. w = Nothing
+   
+  (Just f <|> v) <*> Nothing ≡ Just f <*> Nothing                 -- def (<|>)
+                             ≡ Nothing                            -- def (<*>)
+  
+  (Just f <*> Nothing) <|> (v <*> Nothing) ≡ Nothing <|> Nothing  -- def (<*>)
+                                           ≡ Nothing              -- def (<|>)
+ 
+ 2.2. w = Just x
+  
+  (Just f <|> v) <*> Just x ≡ Just f <*> Just x                           -- def (<|>)
+                            ≡ Just (f x)                                  -- def (<*>)
+  
+  (Just f <*> Just x) <|> (v <*> Just x) ≡ Just (f x) <|> (v <*> Just x)  -- def (<*>)
+                                         ≡ Just (f x)                     -- def (<|>)
+
+Закон для MonadPlus не выполняется.
+Разумеется, контрпример может быть и другим. Пожалуйста, проверьте сами его корректность в GHCi.
+
+GHCi> u = Just True
+GHCi> v = Just False
+GHCi> k = \b -> if b then Nothing else Just "!"
+
+GHCi> (u `mplus` v) >>= k
+Nothing
+
+GHCi> (u >>= k) `mplus` (v >>= k)
+Just "!"
 
 ```
 test
@@ -3206,8 +3289,6 @@ test
 ### 2.5.6 test
 
 ```hs
-https://stepik.org/lesson/30721/step/6?unit=11244
-TODO
 {--
 Предположим мы сделали парсер
 
@@ -3245,14 +3326,19 @@ Select all correct options from the list
 
 -- solution
 
++ (1) charE 'C'
++ (2) charE 'B'
+
+Реализация альтернатива вполне логична: если первый неудачен, выполнить второй, или второй не выполнять.
+В первом примере: А разобрано, на проверку С приходит буква В, падает.
+Во втором примере: последовательность АС не парсится, выполняется поиск В и на этом падает.
+
 ```
 test
 
 ### 2.5.7 test
 
 ```hs
-https://stepik.org/lesson/30721/step/7?unit=11244
-TODO
 {--
 Реализуем улучшенную версию парсера PrsE
 
@@ -3289,7 +3375,36 @@ satisfyEP :: (Char -> Bool) -> PrsEP Char
 satisfyEP :: (Char -> Bool) -> PrsEP Char
 satisfyEP = undefined
 
--- solution
+-- solution (уже делали, только без протаскивания позиции)
+
+satisfyEP :: (Char -> Bool) -> PrsEP Char
+satisfyEP pred = PrsEP $ \ pos str -> 
+    let
+        nextPos = pos + 1
+        msg s = "pos " ++ show nextPos ++ ": unexpected " ++ s
+    in case str of
+        ""      -> (nextPos, Left $ msg "end of input")
+        (c:cs)  -> if pred c then (nextPos, Right (c, cs)) else (nextPos, Left $ msg [c])
+
+-- alternatives
+
+satisfyEP :: (Char -> Bool) -> PrsEP Char
+satisfyEP p = PrsEP $ f . succ
+  where
+    f n "" = (n, Left $ err n "end of input")
+    f n (h : t)
+      | p h = (n, Right (h, t))
+      | otherwise = (n, Left $ err n [h])
+    err n msg = "pos " ++ show n ++ ": unexpected " ++ msg
+
+import Text.Printf (printf)
+satisfyEP :: (Char -> Bool) -> PrsEP Char
+satisfyEP pred = PrsEP $ parse . succ where
+	parse pos [] = err pos "end of input"
+	parse pos (x : xs) = if pred x
+		then (pos, Right (x, xs))
+		else err pos [x]
+	err pos found = (pos, Left $ printf "pos %d: unexpected %s" pos found)
 
 ```
 test
@@ -3297,8 +3412,6 @@ test
 ### 2.5.8 test
 
 ```hs
-https://stepik.org/lesson/30721/step/8?unit=11244
-TODO
 {--
 Сделайте парсер
 
@@ -3323,7 +3436,56 @@ GHCi> parseEP testP "B"
 Left "pos 2: unexpected end of input"
 --}
 
--- solution
+-- solution (делали уже, добавилась распаковка/упаковка позиции в тупле)
+
+instance Functor PrsEP where
+  -- fmap :: (a -> b) -> PrsEP a -> PrsEP b
+  fmap f (PrsEP pars) = PrsEP $ \ pos str ->
+    let 
+        (newPos, parsRes) = pars pos str
+        newParsRes = do { (a, s) <- parsRes; return (f a, s) }
+    in (newPos, newParsRes)
+
+instance Applicative PrsEP where
+  -- pure :: a -> PrsEP a
+  pure a = PrsEP $ \ pos str -> (pos, return (a, str))
+
+  -- (<*>) :: PrsEP (a -> b) -> PrsEP a -> PrsEP b
+  (PrsEP fs) <*> (PrsEP ps) = PrsEP $ \ pos str -> 
+    let
+        (pos1, res1) = fs pos str -- left parser
+        result = do
+            (f, s1) <- res1
+            let (pos2, res2) = ps pos1 s1 -- right parser
+            (a, s2) <- res2
+            return (pos2, (f a, s2))
+    in case result of
+        Left msg -> (pos1, Left msg)
+        Right (pos2, pair) -> (pos2, Right pair)
+
+-- alternatives
+
+instance Functor PrsEP where
+    fmap f = PrsEP . (fmap . fmap . fmap . fmap (\ (a, s) -> (f a, s))) . runPrsEP
+instance Applicative PrsEP where
+    pure x = PrsEP $ \ i s -> (i, Right (x, s))
+    pf <*> px = PrsEP $ \ i s -> case runPrsEP pf i s of
+                (n, Left e) -> (n, Left e)
+                (n, Right (f, s1)) -> runPrsEP (f <$> px) n s1
+
+import Control.Monad
+instance Functor PrsEP where
+    fmap = liftM
+instance Applicative PrsEP where
+    pure a = PrsEP fun where fun n s = (n, Right (a, s))
+    (<*>) = ap
+instance Monad PrsEP where
+    (PrsEP a) >>= f = PrsEP fun where
+                    fun n s = res2 where
+                        (n1, res1) = a n s -- left
+                        res2 = case res1 of
+                                  Left e -> (n1, Left e)
+                                  Right (x, s1) -> runPrsEP (f x) n1 s1
 
 ```
 test
@@ -3331,8 +3493,6 @@ test
 ### 2.5.9 test
 
 ```hs
-https://stepik.org/lesson/30721/step/9?unit=11244
-TODO
 {--
 Сделайте парсер
 
@@ -3357,6 +3517,47 @@ Left "pos 2: unexpected E"
 --}
 
 -- solution
+
+import Text.Printf ( printf )
+import Control.Applicative ( Alternative(..) )
+instance Alternative PrsEP where
+    -- empty :: PrsEP a
+    empty = PrsEP (\i s -> (i, Left $ printf "pos %d: empty alternative" i))
+
+    -- (<|>) :: PrsEP a -> PrsEP a -> PrsEP a -- при выборе из двух Left выбрать тот, где позиция дальше
+    l <|> r = PrsEP $ \ pos str ->
+        case runPrsEP l pos str of
+            (n1, Right x) -> (n1, Right x)
+            (n1, Left msg1) -> case runPrsEP r pos str of
+                (n2, Right x) -> (n2, Right x)
+                (n2, Left msg2) -> if n1 > n2 then (n1, Left msg1) else (n2, Left msg2)
+
+-- alternative
+
+instance Alternative PrsEP where
+  empty = PrsEP $ \pos _ -> (pos, Left $ "pos " ++ show pos ++ ": empty alternative")
+  p1 <|> p2 = PrsEP $ \pos s -> case (runPrsEP p1 pos s, runPrsEP p2 pos s) of
+    (r1@(n1, Left _), r2@(n2, Left _)) -> if n1 > n2 then r1 else r2
+    (r1@(_, Right _), _)               -> r1
+    (_,               r2@(_, Right _)) -> r2
+
+import Control.Applicative
+instance Alternative PrsEP where
+  empty = PrsEP $ \i s -> (i, Left $ "pos " ++ show i ++ ": empty alternative")
+  p1 <|> p2 = PrsEP $ \i s ->
+                case (runPrsEP p1 i s, runPrsEP p2 i s) of
+                  ((i', Right r), _) -> (i', Right r)
+                  (_, (i', Right r)) -> (i', Right r)
+                  ((i1, Left e1), (i2, Left e2)) | i1 >= i2  -> (i1, Left e1)
+                                                 | otherwise -> (i2, Left e2)
+
+import Control.Applicative
+instance Alternative PrsEP where -- eager
+    empty = PrsEP fun where fun n _ = (n, Left ("pos " ++ show n ++ ": empty alternative"))
+    p <|> q = PrsEP fun where
+        fun n s = if np >= nq then rp else rq where
+                rp@(np, ep) = runPrsEP p n s
+                rq@(nq, eq) = runPrsEP q n s
 
 ```
 test
