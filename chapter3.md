@@ -4,9 +4,46 @@
 
 [code sandbox](./chapter-3/test-monads.hs)
 
-Мотивация: ???
+Мотивация: две утилитарные монады, Except, Cont.
+Позволяют control flow в монадических вычислениях (наряду с функцией guard).
+Откуда плавно переходим к композиции монад в случае, если нам надо получить набор эффектов вместо одного.
+Матрешка из монад.
 
-definitions: ???
+definitions:
+- Except (throwE, catchE): обвязка над Either
+
+```hs
+newtype Except e a = Except { runExcept :: Either e a } deriving Show
+except :: Either e a -> Except e a
+except = Except
+
+-- чтобы сделать иксепшн монадой, надо сделать функтор и аппликативный функтор (иерархия классов требует),
+-- покажем стандартную заглушку для случаев, когда мы хотим реализовать именно монаду
+import Control.Monad (liftM, ap, )
+instance Functor (Except e) where
+    fmap = liftM
+instance Applicative (Except e) where
+    pure = return
+    (<*>) = ap
+
+instance Monad (Except e) where
+    return a = Except (Right a) -- упаковка значения в контекст
+    m >>= k = case runExcept m of
+        Left e -> Except (Left e) -- была ошибка, продвигаем ее далее
+        Right a -> k a -- k: Kleisli -- ошибки нет, работаем дальше
+
+throwE :: e -> Except e a
+throwE = except . Left
+
+catchE :: Except e a -> (e -> Except e2 a) -> Except e2 a
+m `catchE` h = case runExcept m of
+    Left e -> h e
+    Right a -> except (Right a)
+
+do { action; ... } `catchE` handler
+```
+definitions
+
 
 ## chapter 3.1, Монада Except
 
@@ -223,10 +260,9 @@ test
 ### 3.1.8 test
 
 ```hs
-https://stepik.org/lesson/30722/step/8?unit=11809
-TODO
 {--
-Реализуйте функцию `tryRead`, получающую на вход строку и пытающуюся всю эту строку превратить в значение заданного типа. 
+Реализуйте функцию `tryRead`, 
+получающую на вход строку и пытающуюся всю эту строку превратить в значение заданного типа. 
 Функция должна возвращать ошибку в одном из двух случаев: 
 если вход был пуст или если прочитать значение не удалось.
 
@@ -252,6 +288,34 @@ tryRead :: Read a => String -> Except ReadError a
 tryRead = undefined
 
 -- solution
+
+import qualified Control.Monad.Trans.Except as TE
+import Text.Read (readMaybe )
+tryRead :: (Read a)=> String -> TE.Except ReadError a
+tryRead "" = TE.throwE EmptyInput
+tryRead s = case parse s of
+    Nothing -> TE.throwE $ NoParse s
+    Just x -> pure x
+parse :: (Read a)=> String -> Maybe a
+parse = readMaybe
+
+-- alternatives
+
+import Text.Read
+tryRead :: Read a => String -> Except ReadError a
+tryRead "" = throwE EmptyInput
+tryRead x = (except $ readEither x) `catchE` (\_ -> throwE $ NoParse x)
+
+tryRead :: Read a => String -> Except ReadError a
+tryRead []                   = throwError EmptyInput
+tryRead s = case reads s of
+  (x, []): _ -> return x
+  _          -> throwError $ NoParse s
+
+import Text.Read
+tryRead :: Read a => String -> Except ReadError a
+tryRead "" = throwE EmptyInput
+tryRead s  = maybe (throwE $ NoParse s) return (readMaybe s)
 
 ```
 test
@@ -301,9 +365,9 @@ GHCi> readPair' intReadInstance intReadInstance "5" "6"
 ```
 extra
 
+### 3.1.9 test
+
 ```hs
-https://stepik.org/lesson/30722/step/9?unit=11809
-TODO
 {--
 Используя `tryRead` из прошлого задания, реализуйте функцию `trySum`, 
 которая получает список чисел, записанных в виде строк, и суммирует их. 
@@ -333,14 +397,42 @@ trySum = undefined
 -- https://hoogle.haskell.org/?hoogle=withExcept&scope=set%3Ahaskell-platform
 -- проверить решение не только на примерах, но и на пустом и бесконечном списках
 
+import qualified Control.Monad.Trans.Except as TE
+trySum :: [String] -> TE.Except SumError Integer
+trySum xs = foldr f zero (zip [1 ..] xs) where
+    zero = pure 0
+    f (i, s) ex = sumOrErr where
+        sumOrErr = do
+            x1 <- (tryRead s :: TE.Except ReadError Integer) `TE.catchE` errConv -- left error first
+            x2 <- ex
+            return (x1 + x2)
+        errConv = \readErr -> TE.throwE (SumError i readErr)
+
+-- alternatives
+
+trySum = (fmap sum) . traverse (\(i, s) -> withExcept (SumError i) (tryRead s)) . zip [1..]
+
+trySum xs = sum <$> traverse tryRead xs -- начало размышлений, вариант без номеров строк
+trySum xs = sum <$> traverse (\(i, s) -> withExcept (SumError i) (tryRead s)) (zip [1..] xs)
+
+trySum list = sum <$> zipWithM go list [1..] where go v n = withExcept (SumError n) $ tryRead v
+
+trySum = (fmap sum) . (traverse tr) . zip [1..] where tr = uncurry $ ( . tryRead) . withExcept . SumError
+
+-- пояснения
+-- траверс списка сделает Иксепт (Either err list), если функция в траверсе создает Иксепты
+ghci> traverse tryReadInt ["1", "2", "three", "four"] -- ExceptT (Identity (Left (NoParse "three")))
+ghci> traverse tryReadInt ["1", "2"] -- ExceptT (Identity (Right [1,2]))
+
 ```
 test
 
-### 3.1.10 MonadPlus Except
+### 3.1.10 MonadPlus Except (удачная альтернатива или накопление ошибки)
 
 Иксепшн как монада мы рассмотрели.
 
-Рассмотрим пользу от иксепшн как `MonadPlus` (к монаде добавлена моноидальная структура).
+Рассмотрим пользу от иксепшн как `MonadPlus` (к монаде добавлена моноидальная структура (mzero, mplus)).
+
 Оператор альтернативы позволит нам "пробовать" вычисление, если оно "упало", то пробовать следующее ...
 Инфа об ошибка накапливается ...
 ```hs
@@ -392,23 +484,30 @@ repl
 
 Ошибка должна быть моноидом, чтобы это (MonadPlus Except) работало.
 ```hs
+data DivByError = ErrZero String | ErrOther
+    deriving (Eq, Show)
+
 instance Monoid DivByError where
     mempty = ErrOther
     ErrOther `mappend` ErrOther = ErrOther
     ErrOther `mappend` (ErrZero s2) = ErrZero s2
     (ErrZero s1) `mappend` ErrOther = ErrZero s1
-    (ErrZero s1) `mappend` (ErrZero s2) = ErrZero $ s1 ++ s2
+    (ErrZero s1) `mappend` (ErrZero s2) = ErrZero (s1 ++ s2)
 
-instance Semigroup DivByError where
+instance Semigroup DivByError where -- хаскел требует
     (<>) = mappend
+
+(/?) :: Double -> Double -> Except DivByError Double -- double -> double -> either
+x /? 0 = throwE $ ErrZero (show x ++ "/0;")
+x /? y = return (x / y) -- return упаковывает результат в монаду иксепшна
 
 -- было
 example0 :: Double -> Double -> Except DivByError String
 example0 x y = action `catchE` handler where
     action = do
         q <- x /? y
-        return $ show q
-    handler = return . show -- handler = \err -> return $ show err
+        return (show q)
+    handler = return . show -- handler err = return (show err)
 
 -- стало
 example2 :: Double -> Double -> Except DivByError String
@@ -422,38 +521,40 @@ example2 x y = action `catchE` handler where
 
 -- демонстрация срабатывания mzero (mempty)
 ghci> runExcept $ example2 5 0
-Right "5.0/0;"
+Right "5.0/0;" -- ошибка, но имеем Right
 ghci> runExcept $ example2 5 2
 Right "2.5"
 ghci> runExcept $ example2 5 (-2)
-Right "negative y: -2.0"
+Right "negative y: -2.0" -- ошибка, опять Right
 
 ```
 repl
 
-### 3.1.12 демонстрация "поиска" рабочей операции в цепочке
+### 3.1.12 демонстрация "долбления" до появления рабочей операции в цепочке
 
 Посмотрим на накопление ошибок в (монадической) цепочке вычислений, используем `msum`
 для построения цепочки
 ```hs
 ghci> runExcept $ msum [5 /? 0, 7 /? 0, 2 /? 0]
-Left (ErrZero "5.0/0;7.0/0;2.0/0;") -- все ошибки
+Left (ErrZero "5.0/0;7.0/0;2.0/0;") -- все ошибки склеены
 
 ghci> runExcept $ msum [5 /? 0, 7 /? 0, 2 /? 3]
-Right 0.6666666666666666 -- встретилась рабочая операция
+Right 0.6666666666666666 -- встретилась рабочая операция, ошибки похерили (альтернатива)
 
 ghci> runExcept $ msum [5 /? 3, 7 /? 0, 2 /? 3]
-Right 1.6666666666666667 -- прокидывается первая рабочая
+Right 1.6666666666666667 -- прокидывается первая рабочая операция (результат) в пайплайне
 
 ```
 repl
+
+### 3.1.13 test
 
 ```hs
 https://stepik.org/lesson/30722/step/13?unit=11809
 TODO
 {--
 Тип данных для представления ошибки обращения к списку по недопустимому индексу `ListIndexError`
-не очень естественно делать представителем класса типов `Monoid`. 
+не очень естественно делать представителем класса типов `Monoid`.
 Однако, если мы хотим обеспечить накопление информации об ошибках, моноид необходим. 
 К счастью, уже знакомая нам функция `withExcept`
 позволяет изменять тип ошибки при вычислении в монаде `Except`
@@ -462,7 +563,6 @@ data ListIndexError = ErrIndexTooLarge Int | ErrNegativeIndex
   deriving (Eq, Show)
 
 withExcept :: (e -> e') -> Except e a -> Except e' a
-https://hoogle.haskell.org/?hoogle=withExcept&scope=set%3Ahaskell-platform
 
 Сделайте тип данных `SimpleError`
 представителем необходимых классов типов и 
@@ -495,6 +595,8 @@ lie2se = undefined
 
 ```
 test
+
+### 3.1.14 test
 
 ```hs
 https://stepik.org/lesson/30722/step/14?unit=11809

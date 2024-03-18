@@ -19,10 +19,15 @@
 {-# HLINT ignore "Redundant bracket" #-}
 {-# HLINT ignore "Use <$>" #-}
 {-# HLINT ignore "Use const" #-}
+{-# HLINT ignore "Redundant lambda" #-}
+{-# HLINT ignore "Avoid lambda" #-}
+{-# OPTIONS_GHC -Wno-simplifiable-class-constraints #-}
 
 module TestMonads where
 
 import Text.Parsec ( getParserState )
+import Text.Read ( readMaybe, readEither, )
+
 import Data.Char ( toLower, toUpper )
 import Data.Function ( (&) )
 import Data.List ( (++), map, (!!), head, tail, )
@@ -68,7 +73,8 @@ import Prelude (
     (==), (*), id, const, Maybe(..), null, ($), succ, (.), undefined, Num(..), Show, Eq,
     foldr, foldl, Either(..), Monoid(..), Semigroup(..), putStrLn, print, (*), (>), (/), (^),
     map, (=<<), (>>=), return, flip, (++), fail, Ord(..), (>>), take, Monad(..),
-    Double, either, Integer, head, tail, IO(..),
+    Double, either, Integer, head, tail, IO(..), Read(..), ReadS(..), read, reads,
+    zip,
     )
 
 newtype Except e a = Except { runExcept :: Either e a } deriving Show
@@ -444,3 +450,121 @@ test3 = TE.runExcept $ [1..100] !!! 5 -- Right 6
 test4 = [1,2,3] !!!! 0 -- Right 1
 test5 = [1,2,3] !!!! 42 -- Left (ErrIndexTooLarge 42)
 test6 = [1,2,3] !!!! (-3) -- Left ErrNegativeIndex
+
+
+{--
+Реализуйте функцию `tryRead`, 
+получающую на вход строку и пытающуюся всю эту строку превратить в значение заданного типа. 
+Функция должна возвращать ошибку в одном из двух случаев: 
+если вход был пуст или если прочитать значение не удалось.
+
+Информация об ошибке хранится в специальном типе данных:
+
+data ReadError = EmptyInput | NoParse String
+  deriving Show
+
+GHCi> runExcept (tryRead "5" :: Except ReadError Int)
+Right 5
+GHCi> runExcept (tryRead "5" :: Except ReadError Double)
+Right 5.0
+GHCi> runExcept (tryRead "5zzz" :: Except ReadError Int)
+Left (NoParse "5zzz")
+GHCi> runExcept (tryRead "(True, ())" :: Except ReadError (Bool, ()))
+Right (True,())
+GHCi> runExcept (tryRead "" :: Except ReadError (Bool, ()))
+Left EmptyInput
+GHCi> runExcept (tryRead "wrong" :: Except ReadError (Bool, ()))
+Left (NoParse "wrong")
+--}
+
+-- import qualified Control.Monad.Trans.Except as TE
+-- import Prelude ( Read, ReadS(..), read, reads, )
+-- import Text.Read (readMaybe, readEither, )
+data ReadError = EmptyInput | NoParse String
+    deriving Show
+
+tryRead :: (Read a)=> String -> TE.Except ReadError a
+tryRead "" = TE.throwE EmptyInput
+tryRead s = case parse s of
+    Nothing -> TE.throwE $ NoParse s
+    Just x -> pure x
+
+parse :: (Read a)=> String -> Maybe a
+parse = readMaybe
+
+test7 = TE.runExcept (tryRead "5" :: TE.Except ReadError Int) -- Right 5
+test8 = TE.runExcept (tryRead "5" :: TE.Except ReadError Double) -- Right 5.0
+test10 = TE.runExcept (tryRead "(True, ())" :: TE.Except ReadError (Bool, ())) -- Right (True,())
+test11 = TE.runExcept (tryRead "" :: TE.Except ReadError (Bool, ())) -- Left EmptyInput
+test9 = TE.runExcept (tryRead "5zzz" :: TE.Except ReadError Int) -- Left (NoParse "5zzz")
+test12 = TE.runExcept (tryRead "wrong" :: TE.Except ReadError (Bool, ())) -- Left (NoParse "wrong")
+
+
+{--
+Используя `tryRead` из прошлого задания, реализуйте функцию `trySum`, 
+которая получает список чисел, записанных в виде строк, и суммирует их. 
+В случае неудачи, функция должна возвращать информацию об ошибке 
+вместе с номером элемента списка (нумерация с единицы), вызвавшим ошибку.
+
+Для хранения информации об ошибке и номере проблемного элемента используем новый тип данных:
+
+data SumError = SumError Int ReadError
+  deriving Show
+
+GHCi> runExcept $ trySum ["10", "20", "30"]
+Right 60
+GHCi> runExcept $ trySum ["10", "20", ""]
+Left (SumError 3 EmptyInput)
+GHCi> runExcept $ trySum ["10", "two", "30"]
+Left (SumError 2 (NoParse "two"))
+
+Подсказка: функция `withExcept` в этом задании может быть чрезвычайно полезна. 
+Постарайтесь максимально эффективно применить знания, полученные на прошлой неделе.
+https://hackage.haskell.org/package/transformers-0.5.4.0/docs/Control-Monad-Trans-Except.html#v:withExcept
+--}
+
+-- import qualified Control.Monad.Trans.Except as TE
+data SumError = SumError Int ReadError
+  deriving Show
+
+trySum :: [String] -> TE.Except SumError Integer
+trySum xs = foldr f zero (zip [1 ..] xs) where
+    zero = pure 0
+    f (i, s) ex = sumOrErr where
+        sumOrErr = do
+            x1 <- (tryRead s :: TE.Except ReadError Integer) `TE.catchE` errConv -- left error first
+            x2 <- ex
+            return (x1 + x2)
+        errConv = \readErr -> TE.throwE (SumError i readErr)
+
+instance Monoid SumError where
+    mempty = undefined
+    mappend = undefined
+
+instance Semigroup SumError where
+    (<>) = mappend
+
+{--
+foldr возвращает самую правую ошибку, надо самую левую (но надо работать с бесконечностью)
+trySum :: [String] -> TE.Except SumError Integer
+trySum xs = foldr f zero (zip [1 ..] xs) where
+    zero = pure 0
+    f (i, s) ex = case TE.runExcept ex of
+        Left _ -> ex -- (SumError idx readErr)
+        Right x1 -> sumOrErr `TE.catchE` errConv where
+            sumOrErr = do
+                x2 <- tryRead s :: TE.Except ReadError Integer
+                return (x1 + x2)
+            errConv = (\readErr -> TE.throwE (SumError i readErr))
+
+--}
+
+test13 = TE.runExcept $ trySum ["10", "20", "30"] -- Right 60
+test14 = TE.runExcept $ trySum ["10", "20", ""] -- Left (SumError 3 EmptyInput)
+test15 = TE.runExcept $ trySum ["10", "two", "30"] -- Left (SumError 2 (NoParse "two"))
+
+tryReadInt :: String -> TE.Except ReadError Int
+tryReadInt "" = TE.throwE EmptyInput
+tryReadInt s = case readMaybe s of
+    Nothing -> TE.throwE $ NoParse s
+    Just x -> pure x
