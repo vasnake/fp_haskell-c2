@@ -753,3 +753,117 @@ instance MonadPlus (Validate e) where
 
 test21 = getValidate $ validateSum ["10", "20", "30"] -- Right 60
 test22 = getValidate $ validateSum ["10", "", "30", "oops"] -- Left [SumError 2 EmptyInput,SumError 4 (NoParse "oops")]
+
+
+{--
+CPS-преобразование часто применяют для создания предметно-ориентированных языков (DSL).
+https://ru.wikipedia.org/wiki/Предметно-ориентированный_язык
+
+Реализуйте комбинаторы, которые позволят записывать числа вот в таком забавном формате:
+
+GHCi> decode one hundred twenty three as a number
+123
+GHCi> decode one hundred twenty one as a number
+121
+GHCi> decode one hundred twenty as a number
+120
+GHCi> decode one hundred as a number
+100
+GHCi> decode three hundred as a number
+300
+GHCi> decode two thousand seventeen as a number
+2017
+
+Достаточно чтобы работали всякие простые случаи, как в примерах; 
+не старайтесь поддержать прямо все допустимые варианты, это потребует несколько бóльших усилий.
+--}
+decode f = f 0
+as n f = f n
+a n f = f n
+number = id
+
+one n f = f (n + 1)
+two n f = f (n + 2)
+three n f = f (n + 3)
+seventeen n f = f (n + 17)
+twenty n f = f (n + 20)
+hundred n f = f (n * 100)
+thousand n f = f (n * 1000)
+
+test23 = decode one hundred twenty three as a number -- 123
+test24 = decode one hundred twenty one as a number -- 121
+test25 = decode one hundred twenty as a number -- 120
+test26 = decode one hundred as a number -- 100
+test27 = decode three hundred as a number -- 300
+test28 = decode two thousand seventeen as a number -- 2017
+
+
+{--
+Реализуйте функцию `showCont`, запускающую вычисление и возвращающую его результат в виде строки.
+--}
+showCont :: Show a => Cont String a -> String
+showCont c = runCont c show
+
+
+{--
+Возможность явно работать с продолжением обеспечивает доступ к очень гибкому управлению исполнением. 
+В этом задании вам предстоит реализовать вычисление, которое 
+анализирует и модифицирует значение, возвращаемое кодом, написанным после него.
+
+В качестве примера рассмотрим следующую функцию:
+
+addTens :: Int -> Checkpointed Int
+addTens x1 = \checkpoint -> do
+  checkpoint x1
+  let x2 = x1 + 10
+  checkpoint x2     {- x2 = x1 + 10 -}
+  let x3 = x2 + 10
+  checkpoint x3     {- x3 = x1 + 20 -}
+  let x4 = x3 + 10
+  return x4         {- x4 = x1 + 30 -}
+
+Эта функция принимает значение `x1`, 
+совершает с ним последовательность операций (несколько раз прибавляет 10) и 
+после каждой операции «сохраняет» промежуточный результат. 
+При запуске такой функции используется дополнительный предикат, который является критерием «корректности» результата, 
+и в случае, если возвращенное функцией значение этому критерию не удовлетворяет, 
+вернется последнее удовлетворяющее ему значение из «сохраненных»:
+
+GHCi> runCheckpointed (< 100) $ addTens 1
+31
+GHCi> runCheckpointed  (< 30) $ addTens 1
+21
+GHCi> runCheckpointed  (< 20) $ addTens 1
+11
+GHCi> runCheckpointed  (< 10) $ addTens 1
+1
+
+(Если ни возвращенное, ни сохраненные значения не подходят, 
+результатом должно быть первое из сохраненных значений; 
+если не было сохранено ни одного значения, то результатом должно быть возвращенное значение.)
+
+Обратите внимание на то, что функция `checkpoint` передается в `Checkpointed` вычисление как параметр, 
+поскольку её поведение зависит от предиката, который будет известен только непосредственно при запуске.
+--}
+
+-- type Checkpointed a = (a -> [a]) -> [a]
+-- Cont resultType valueType -- runCont :: (a -> r) -> r
+type Checkpointed a = (a -> Cont [a] a) -> Cont [a] a
+
+runCheckpointed :: (a -> Bool) -> Checkpointed a -> a
+runCheckpointed predicate checkpointed = undefined -- runCont _ _
+
+addTens :: Int -> Checkpointed Int
+addTens x1 checkpoint = do
+    checkpoint x1
+    let x2 = x1 + 10
+    checkpoint x2     {- x2 = x1 + 10 -}
+    let x3 = x2 + 10
+    checkpoint x3     {- x3 = x1 + 20 -}
+    let x4 = x3 + 10
+    return x4         {- x4 = x1 + 30 -}
+
+test29 = runCheckpointed (< 100) $ addTens 1 -- 31
+test30 = runCheckpointed  (< 30) $ addTens 1 -- 21
+test31 = runCheckpointed  (< 20) $ addTens 1 -- 11
+test32 = runCheckpointed  (< 10) $ addTens 1 -- 1
