@@ -10,7 +10,7 @@
 Матрешка из монад.
 
 definitions:
-- Except (throwE, catchE): обвязка над Either
+- Except (throwE, catchE, withExcept): обвязка над Either, either
 
 ```hs
 newtype Except e a = Except { runExcept :: Either e a } deriving Show
@@ -26,7 +26,7 @@ instance Applicative (Except e) where
     pure = return
     (<*>) = ap
 
-instance Monad (Except e) where
+instance Monad (Except e) where -- первая встреченная в пайплайне ошибка
     return a = Except (Right a) -- упаковка значения в контекст
     m >>= k = case runExcept m of
         Left e -> Except (Left e) -- была ошибка, продвигаем ее далее
@@ -41,6 +41,33 @@ m `catchE` h = case runExcept m of
     Right a -> except (Right a)
 
 do { action; ... } `catchE` handler
+
+instance (Monoid e)=> Alternative (Except e) where 
+    empty = mzero
+    (<|>) = mplus
+instance (Monoid e)=> MonadPlus (Except e) where -- альтернатива ошибок, пайплайн с накоплением ошибки
+    mzero = Except (Left mempty) -- throwE mempty -- создается ошибка на нейтральном содержимом
+    (Except x) `mplus` (Except y) = Except ( -- склейка двух ошибок или проброс результата
+        case x of
+            Left e -> either (Left . mappend e) Right y -- хитрая хитрость, полезняшка
+            r -> r
+    )
+    -- x `mplus` y = withExcept mappend x `catchE` flip withExcept y
+
+either :: (a -> c) -> (b -> c) -> Either a b -> c
+-- трансформер either, смотрит на содержимое третьего параметра (Either) и запускает либо первую функцию, либо вторую
+
+-- альтернативная реализация с исполозованием функции either
+instance Monad (Except e) where
+    return = except . pure
+    m >>= k = either throwE k (runExcept m)
+
+catchE :: Except e a -> (e -> Except e' a) -> Except e' a
+m `catchE` handler = either handler pure (runExcept m)
+
+withExcept :: (e -> e') -> Except e a -> Except e' a
+withExcept f = either (throwE . f) pure . runExcept
+
 ```
 definitions
 
@@ -438,7 +465,7 @@ test
 ```hs
 -- реализация альтернатив через MonadPlus (для дальнейшего изложения не существенно)
 -- ограничение моноида дает возможность накапливать инфу об ошибках
-instance (Monoid e) => Alternative (Except e) where 
+instance (Monoid e) => Alternative (Except e) where
     empty = mzero
     (<|>) = mplus
 
@@ -530,7 +557,9 @@ Right "negative y: -2.0" -- ошибка, опять Right
 ```
 repl
 
-### 3.1.12 демонстрация "долбления" до появления рабочей операции в цепочке
+### 3.1.12 демонстрация "долбления" MonadPlus Except до успешного шага
+
+MonadPlus Except: Цепочка вычислений выполняется до первой успешной, ошибки накапливаются.
 
 Посмотрим на накопление ошибок в (монадической) цепочке вычислений, используем `msum`
 для построения цепочки
@@ -550,8 +579,6 @@ repl
 ### 3.1.13 test
 
 ```hs
-https://stepik.org/lesson/30722/step/13?unit=11809
-TODO
 {--
 Тип данных для представления ошибки обращения к списку по недопустимому индексу `ListIndexError`
 не очень естественно делать представителем класса типов `Monoid`.
@@ -593,31 +620,62 @@ lie2se = undefined
 
 -- solution
 
+import Text.Printf ( printf )
+instance Monoid SimpleError where
+    mempty = Simple ""
+    (Simple e1) `mappend` (Simple e2) = Simple (e1 ++ e2)
+lie2se :: ListIndexError -> SimpleError
+lie2se (ErrIndexTooLarge n) = Simple (printf "[index (%d) is too large]" n)
+lie2se ErrNegativeIndex = Simple "[negative index]"
+
+-- alternatives
+
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE StandaloneDeriving         #-}
+instance Monoid SimpleError where
+  mempty = Simple mempty
+  mappend = (Simple . ) . ( . getSimple) . mappend . getSimple
+lie2se :: ListIndexError -> SimpleError
+lie2se x = Simple ('[': display x "]") where
+  display ErrNegativeIndex = mappend "negative index"
+  display (ErrIndexTooLarge i) = mappend "index (" . shows i . mappend ") is too large"
+
+import Data.Function
+instance Monoid SimpleError where
+  mempty = Simple mempty
+  mappend = (Simple .) . (mappend `on` getSimple)
+lie2se :: ListIndexError -> SimpleError
+lie2se ErrNegativeIndex = Simple "[negative index]"
+lie2se (ErrIndexTooLarge n) = Simple $ "[index (" ++ (show n) ++ ") is too large]"
+
 ```
 test
 
 ### 3.1.14 test
 
 ```hs
-https://stepik.org/lesson/30722/step/14?unit=11809
-TODO
 {--
-Стандартная семантика `Except` как аппликативного функтора и монады: выполнять цепочку вычислений до первой ошибки. 
+Стандартная семантика `Except` как аппликативного функтора и монады: 
+выполнять цепочку вычислений до первой ошибки. 
+
 Реализация представителей классов `Alternative` и `MonadPlus` наделяет эту монаду альтернативной семантикой: 
 попробовать несколько вычислений, вернуть результат первого успешного, а в случае неудачи — все возникшие ошибки.
 
-Довольно часто возникает необходимость сделать нечто среднее. 
+Довольно часто возникает необходимость сделать нечто среднее.
+
 К примеру, при проверке корректности заполнения анкеты или при компиляции программы для общего успеха необходимо, 
-чтобы ошибок совсем не было, но в то же время, нам хотелось бы не останавливаться после первой же ошибки, 
-а продолжить проверку, чтобы отобразить сразу все проблемы. 
+чтобы ошибок совсем не было, но в то же время, нам хотелось бы:
+не останавливаться после первой же ошибки, а продолжить проверку,
+чтобы отобразить сразу все проблемы.
+
 `Except` такой семантикой не обладает, но никто не может помешать нам сделать свой тип данных 
 (назовем его `Validate`), 
 представители которого будут обеспечивать требую семантику, позволяющую сохранить список всех произошедших ошибок:
 
 newtype Validate e a = Validate { getValidate :: Either [e] a }
 
-Реализуйте функцию 
-validateSum :: [String] -> Validate SumError Integer
+Реализуйте функцию
+validateSum :: [String] -> Validate SumError Integer -- список ошибок или сумма
 
 GHCi> getValidate $ validateSum ["10", "20", "30"]
 Right 60
@@ -635,6 +693,153 @@ validateSum :: [String] -> Validate SumError Integer
 validateSum = undefined
 
 -- solution
+на самом деле, если решение trySum на traverse, то надо просто определить Applicative Validate
+с нужными свойствами (склейка ошибок). И будет ОК
+
+import Control.Applicative -- ( Alternative(..), Applicative(..), (<*>), (<$>), ZipList(..), (<**>), (<|>) )
+import Control.Monad -- ( liftM, mplus, guard, mfilter, ap, guard, MonadPlus(..), when, )
+import qualified Control.Monad.Trans.Except as TE
+
+collectE :: TE.Except e a -> Validate e a
+collectE ex = Validate (either (Left . (: [])) Right (TE.runExcept ex))
+
+validateSum :: [String] -> Validate SumError Integer
+validateSum xs = res where
+    res = case getValidate errRes of
+        Left [] -> sum <$> (sequence foldable) -- no errors
+        _ -> errRes
+    errRes = msum foldable -- Either [err] x
+    foldable = fmap converter (zip [1..] xs) -- list of Either
+    converter (i, s) = collectE (numOrErr i s)
+    numOrErr i s = TE.withExcept (SumError i) (tryRead s)
+
+instance Functor (Validate e) where
+    -- fmap :: (a -> b) -> Validate e a -> Validate e b
+    fmap f v = Validate $ f <$> (getValidate v)
+
+instance Applicative (Validate e) where
+    -- pure :: a -> Validate e a
+    pure x = Validate (Right x)
+    -- (<*>) :: Validate e (a -> b) -> Validate e a -> Validate e b -- семантика Either, первая встреченная ошибка
+    fs <*> xs = Validate ((getValidate fs) <*> (getValidate xs))
+
+instance Monad (Validate e) where
+    -- return :: a -> Validate e a
+    return = pure
+    -- (>>=) :: Validate e a -> (a -> Validate e b) -> Validate e b
+    m >>= k = either (Validate . Left) k (getValidate m)
+
+instance Alternative (Validate e) where
+    -- empty :: Validate e a
+    empty = Validate (Left empty)
+
+    -- ok, ok -> ok
+    -- err, err -> sum
+    -- err, ok -> err
+    -- ok, err -> err
+    -- (<|>) :: Validate e a -> Validate e a -> Validate e a
+    v1 <|> v2 = Validate v3 where
+        v3 = case (getValidate v1, getValidate v2) of
+            (Left x, Left y) -> Left (x `mappend` y)
+            (Left x, _) -> Left x
+            (Right x, Left y) -> Left y
+            (Right x, Right y) -> Right y
+
+instance MonadPlus (Validate e) where
+    -- mzero :: Validate e a
+    mzero = empty
+    -- mplus :: Validate e a -> Validate e a -> Validate e a
+    mplus = (<|>)
+
+-- alternatives
+
+collectE :: Except e a -> Validate e a
+collectE e = Validate $ runExcept $ catchE e $ throwE . pure
+validateSum :: [String] -> Validate SumError Integer
+validateSum = fmap sum . sequenceA . zipWith f [1..]
+    where f i = collectE . withExcept (SumError i) . tryRead
+instance Functor (Validate e) where
+    fmap = (<*>) . pure
+instance Applicative (Validate e) where
+    pure = Validate . pure
+    Validate (Left e) <*> Validate (Left e') = Validate $ Left $ e ++ e'
+    Validate f        <*> Validate v         = Validate $ f <*> v
+
+instance Functor (Validate e) where
+  fmap f = Validate . fmap f . getValidate
+instance Applicative (Validate e) where
+  pure = Validate . pure
+  Validate (Right f) <*> vx = f <$> vx
+  vf <*> Validate (Right x) = ($ x) <$> vf
+  Validate (Left es1) <*> Validate (Left es2) = Validate $ Left (es1 `mappend` es2)
+collectE :: Except e a -> Validate e a
+collectE ex = case runExcept ex of Right x -> Validate (Right x); Left e -> Validate (Left [e])
+validateSum :: [String] -> Validate SumError Integer
+validateSum xs = sum <$> traverse (\(i, s) -> collectE $ withExcept (SumError i) $ tryRead s) (zip [1..] xs)
+
+import           Control.Applicative
+import           Control.Monad.Except
+instance Functor (Validate e) where fmap = liftA
+instance Applicative (Validate e) where
+  pure = Validate . return
+  Validate fa <*> Validate xa = Validate $ either (Left . either (flip mappend) (flip const) xa) (<$> xa) fa
+collectE :: Except e a -> Validate e a
+collectE = Validate .runExcept.withExcept return
+validateSum :: [String] -> Validate SumError Integer
+validateSum = fmap sum.traverse (collectE.tr).zip[1..] where tr=uncurry$ (.tryRead).withExcept.SumError
+
+instance Functor (Validate e) where
+  fmap f = Validate . fmap f . getValidate
+instance Applicative (Validate e) where
+  pure = Validate . Right
+  fs <*> xs = Validate $
+    case (getValidate fs, getValidate xs) of
+      (Right f,  Right x)  -> Right $ f x
+      (Left es1, Left es2) -> Left $ es1 ++ es2
+      (Left es,  _)        -> Left es
+      (_,        Left es)  -> Left es
+tryReads :: Read a => [String] -> [Except SumError a]
+tryReads = zipWith (withExcept . SumError) [1..] . fmap tryRead
+collectE :: Except e a -> Validate e a
+collectE = Validate . either (Left . pure) Right . runExcept
+validateSum :: [String] -> Validate SumError Integer
+validateSum = fmap sum . traverse collectE . tryReads
+-- just for comparison
+trySum :: [String] -> Except SumError Integer
+trySum = fmap sum . sequence . tryReads
+
+instance (Num a) => Monoid (Validate e a) where
+  mempty = Validate $ Right 0
+  (Validate vl) `mappend` (Validate vr) = Validate $ mappendH vl vr where
+    (Left e1) `mappendH` (Left e2) = Left $ e1 `mappend` e2
+    (Left e1) `mappendH` _         = Left e1
+    _         `mappendH` (Left e2) = Left e2
+    (Right a) `mappendH` (Right b) = Right (a + b)
+collectE :: Except e a -> Validate e a
+collectE e = 
+  case runExcept e of
+      Left e  -> Validate $ Left [e]
+      Right e -> Validate $ Right e
+validateSum :: [String] -> Validate SumError Integer
+validateSum = mconcat . fmap collectE . zipWith (withExcept . SumError) [1..] . fmap tryRead
+
+import Data.Monoid (Sum(..))
+instance Monoid a => Monoid (Validate e a) where
+  mempty = Validate $ Right mempty
+  (Validate (Left e1))  `mappend` (Validate (Left e2))  = Validate (Left $ e1 ++ e2)
+  (Validate (Left e1))  `mappend` (Validate _)          = Validate $ Left e1
+  (Validate _)          `mappend` (Validate (Left e2))  = Validate $ Left e2
+  (Validate (Right v1)) `mappend` (Validate (Right v2)) = Validate $ Right (v1 `mappend` v2)
+instance Functor (Validate e) where
+  fmap f (Validate x) = Validate (f <$> x)
+validateSum :: [String] -> Validate SumError Integer
+validateSum = fmap getSum . mconcat .
+  map (\(i, s) -> Sum <$> (collectE $ withExcept (SumError i) (tryRead s))) .
+  zip [1..]
+collectE :: Except e a -> Validate e a
+collectE ex = Validate $ case (runExcept ex) of
+  Left err -> Left [err]
+  Right ok -> Right ok
 
 ```
 test

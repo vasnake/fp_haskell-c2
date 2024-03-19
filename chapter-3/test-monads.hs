@@ -22,6 +22,7 @@
 {-# HLINT ignore "Redundant lambda" #-}
 {-# HLINT ignore "Avoid lambda" #-}
 {-# OPTIONS_GHC -Wno-simplifiable-class-constraints #-}
+{-# HLINT ignore "Eta reduce" #-}
 
 module TestMonads where
 
@@ -31,6 +32,7 @@ import Text.Read ( readMaybe, readEither, )
 import Data.Char ( toLower, toUpper )
 import Data.Function ( (&) )
 import Data.List ( (++), map, (!!), head, tail, )
+import Text.Printf ( printf, )
 
 import Data.Monoid (
     Sum(..), Product(..), Endo(..), appEndo, (<>), Dual(..), First(..)
@@ -45,14 +47,14 @@ import Control.Applicative (
     )
 
 import Data.Foldable (
-    Foldable(..), fold, foldMap, maximum, sequenceA_, sequence_, traverse_, msum
+    Foldable(..), fold, foldMap, maximum, sequenceA_, sequence_, traverse_, msum,
     )
 
 import Data.Traversable (
     sequence, sequenceA, Traversable(..), traverse, fmapDefault, foldMapDefault, mapM
     )
 
-import Control.Monad ( liftM, mplus, guard, mfilter, ap, guard, MonadPlus(..), when )
+import Control.Monad ( liftM, mplus, guard, mfilter, ap, guard, MonadPlus(..), when, )
 -- import Control.Monad.Cont ( callCC )
 -- import Control.Monad (liftM, ap, MonadPlus(..), guard, msum)
 -- import Control.Applicative (Alternative(..))
@@ -568,3 +570,186 @@ tryReadInt "" = TE.throwE EmptyInput
 tryReadInt s = case readMaybe s of
     Nothing -> TE.throwE $ NoParse s
     Just x -> pure x
+
+
+{--
+Тип данных для представления ошибки обращения к списку по недопустимому индексу `ListIndexError`
+не очень естественно делать представителем класса типов `Monoid`.
+Однако, если мы хотим обеспечить накопление информации об ошибках, моноид необходим. 
+К счастью, уже знакомая нам функция `withExcept`
+позволяет изменять тип ошибки при вычислении в монаде `Except`
+
+data ListIndexError = ErrIndexTooLarge Int | ErrNegativeIndex 
+  deriving (Eq, Show)
+
+withExcept :: (e -> e') -> Except e a -> Except e' a
+
+Сделайте тип данных `SimpleError`
+представителем необходимых классов типов и 
+реализуйте преобразователь для типа данных ошибки `lie2se` так,
+
+newtype SimpleError = Simple { getSimple :: String }
+  deriving (Eq, Show)
+
+lie2se :: ListIndexError -> SimpleError 
+
+чтобы обеспечить следующее поведение
+
+GHCi> toSimple = runExcept . withExcept lie2se
+GHCi> xs = [1,2,3]
+GHCi> toSimple $ xs !!! 42
+Left (Simple {getSimple = "[index (42) is too large]"})
+GHCi> toSimple $ xs !!! (-2)
+Left (Simple {getSimple = "[negative index]"})
+GHCi> toSimple $ xs !!! 2
+Right 3
+GHCi> import Data.Foldable (msum)
+GHCi> toSimpleFromList = runExcept . msum . map (withExcept lie2se)
+GHCi> toSimpleFromList [xs !!! (-2), xs !!! 42]
+Left (Simple {getSimple = "[negative index][index (42) is too large]"})
+GHCi> toSimpleFromList [xs !!! (-2), xs !!! 2]
+Right 3
+--}
+
+-- data ListIndexError = ErrIndexTooLarge Int | ErrNegativeIndex deriving (Eq, Show)
+-- import Text.Printf ( printf )
+newtype SimpleError = Simple { getSimple :: String } deriving (Eq, Show)
+
+instance Monoid SimpleError where
+    mempty :: SimpleError
+    mempty = Simple ""
+    mappend :: SimpleError -> SimpleError -> SimpleError
+    mappend = (<>)
+
+instance Semigroup SimpleError where
+    (<>) :: SimpleError -> SimpleError -> SimpleError
+    (Simple e1) <> (Simple e2) = Simple (e1 ++ e2)
+
+lie2se :: ListIndexError -> SimpleError
+lie2se (ErrIndexTooLarge n) = Simple (printf "[index (%d) is too large]" n)
+lie2se ErrNegativeIndex = Simple "[negative index]"
+
+xs = [1, 2, 3]
+toSimple = TE.runExcept . TE.withExcept lie2se
+toSimpleFromList = TE.runExcept . msum . map (TE.withExcept lie2se)
+test16 = toSimple $ xs !!! 42 -- Left (Simple {getSimple = "[index (42) is too large]"})
+test17 = toSimple $ xs !!! (-2) -- Left (Simple {getSimple = "[negative index]"})
+test18 = toSimple $ xs !!! 2 -- Right 3
+test19 = toSimpleFromList [xs !!! (-2), xs !!! 42] -- Left (Simple {getSimple = "[negative index][index (42) is too large]"})
+test20 = toSimpleFromList [xs !!! (-2), xs !!! 2] -- Right 3
+
+
+{--
+Стандартная семантика `Except` как аппликативного функтора и монады: 
+выполнять цепочку вычислений до первой ошибки. 
+
+Реализация представителей классов `Alternative` и `MonadPlus` наделяет эту монаду альтернативной семантикой: 
+попробовать несколько вычислений, вернуть результат первого успешного, а в случае неудачи — все возникшие ошибки.
+
+Довольно часто возникает необходимость сделать нечто среднее.
+
+К примеру, при проверке корректности заполнения анкеты или при компиляции программы для общего успеха необходимо, 
+чтобы ошибок совсем не было, но в то же время, нам хотелось бы:
+не останавливаться после первой же ошибки, а продолжить проверку,
+чтобы отобразить сразу все проблемы.
+
+`Except` такой семантикой не обладает, но никто не может помешать нам сделать свой тип данных 
+(назовем его `Validate`), 
+представители которого будут обеспечивать требую семантику, позволяющую сохранить список всех произошедших ошибок:
+
+newtype Validate e a = Validate { getValidate :: Either [e] a }
+
+Реализуйте функцию
+validateSum :: [String] -> Validate SumError Integer -- список ошибок или сумма
+
+GHCi> getValidate $ validateSum ["10", "20", "30"]
+Right 60
+GHCi> getValidate $ validateSum ["10", "", "30", "oops"]
+Left [SumError 2 EmptyInput,SumError 4 (NoParse "oops")]
+
+Эта функция практически ничем не отличается от уже реализованной ранее `trySum`, если использовать функцию-адаптер 
+collectE :: Except e a -> Validate e a 
+и представителей каких-нибудь классов типов для `Validate`
+
+trySum :: [String] -> TE.Except SumError Integer
+trySum xs = sum <$> traverse (\(i, s) -> withExcept (SumError i) (tryRead s)) (zip [1..] xs)
+-- trySum xs = sum <$> traverse tryRead xs -- начало размышлений, вариант без номеров строк
+--}
+
+-- import qualified Control.Monad.Trans.Except as TE
+newtype Validate e a = Validate { getValidate :: Either [e] a }
+
+collectE :: TE.Except e a -> Validate e a
+collectE ex = Validate (either (Left . (: [])) Right (TE.runExcept ex))
+-- Validate (either errF valF (TE.runExcept ex)) where
+-- errF e = Left [e]
+-- valF v = Right v
+
+validateSum :: [String] -> Validate SumError Integer
+validateSum xs = res where
+    res = case getValidate errRes of
+        Left [] -> sum <$> (sequence foldable) -- no errors
+        _ -> errRes
+    errRes = msum foldable -- Either [err] x
+    foldable = fmap converter (zip [1..] xs) -- list of Either
+    converter (i, s) = collectE (numOrErr i s)
+    numOrErr i s = TE.withExcept (SumError i) (tryRead s)
+-- вот этот выебон не нужен,
+-- задачка решается как trySum, через траверс. Код почти идентичный, только ошибку надо конвертнуть
+
+-- validateSum xs = sum <$> traverse (\(i, s) -> collectE (numOrErr i s)) (zip [1..] xs) where
+--     numOrErr i s = TE.withExcept (SumError i) (tryRead s)
+-- validateSum xs = sum <$> validateOnList where
+--     validateOnList = traverse (\(i, s) -> collectE (numOrErr i s)) (zip [1..] xs)
+--     numOrErr i s = TE.withExcept (SumError i) (tryRead s)
+    -- validateOnList :: Validate SumError [Integer]
+    -- validateOnList = mapM (\(i, s) -> collectE (numOrErr i s)) (zip [1..] xs)
+
+{--
+нужные операции: <|>, mplus, msum
+msum :: (Foldable t, MonadPlus m) => t (m a) -> m a
+mapM :: Monad m => (a -> m b) -> t a -> m (t b)
+traverse :: Applicative f => (a -> f b) -> t a -> f (t b) 
+either :: (a -> c) -> (b -> c) -> Either a b -> c
+--}
+instance Functor (Validate e) where
+    fmap :: (a -> b) -> Validate e a -> Validate e b
+    fmap f v = Validate $ f <$> (getValidate v)
+
+instance Applicative (Validate e) where -- задачка решается через аппликатив, все остальное не надо
+    pure :: a -> Validate e a
+    pure x = Validate (Right x)
+    -- семантика Either, первая встреченная ошибка
+    (<*>) :: Validate e (a -> b) -> Validate e a -> Validate e b
+    fs <*> xs = Validate ((getValidate fs) <*> (getValidate xs))
+
+instance Monad (Validate e) where
+    return :: a -> Validate e a
+    return = pure
+    (>>=) :: Validate e a -> (a -> Validate e b) -> Validate e b
+    m >>= k = either (Validate . Left) k (getValidate m)
+
+instance Alternative (Validate e) where
+    empty :: Validate e a
+    empty = Validate (Left empty)
+
+    -- ok, ok -> ok
+    -- err, err -> sum
+    -- err, ok -> err
+    -- ok, err -> err
+    (<|>) :: Validate e a -> Validate e a -> Validate e a
+    v1 <|> v2 = Validate v3 where
+        v3 = case (getValidate v1, getValidate v2) of
+            (Left x, Left y) -> Left (x `mappend` y)
+            (Left x, _) -> Left x
+            (Right x, Left y) -> Left y
+            (Right x, Right y) -> Right y
+
+instance MonadPlus (Validate e) where
+    mzero :: Validate e a
+    mzero = empty
+    mplus :: Validate e a -> Validate e a -> Validate e a
+    mplus = (<|>)
+
+test21 = getValidate $ validateSum ["10", "20", "30"] -- Right 60
+test22 = getValidate $ validateSum ["10", "", "30", "oops"] -- Left [SumError 2 EmptyInput,SumError 4 (NoParse "oops")]
