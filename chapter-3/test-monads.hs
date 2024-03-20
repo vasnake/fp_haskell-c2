@@ -179,13 +179,13 @@ test1 = runExcept $ msum [5 /? 0, 7 /? 0, 2 /? 0]
 square :: Int -> (Int -> r) -> r
 square x c = c (x ^ 2)
 
-add :: Int -> Int -> (Int -> r) -> r
-add x y c = c (x + y)
+add_ :: Int -> Int -> (Int -> r) -> r
+add_ x y c = c (x + y)
 
 sumSquares x y c =
     square x $ \x2 ->
     square y $ \y2 ->
-    add x2 y2 $ \ss -> -- тут мы видим некотурую нелинейность
+    add_ x2 y2 $ \ss -> -- тут мы видим некотурую нелинейность
     c ss
 -- напоминает do-нотацию монады, не так ли?
 
@@ -838,6 +838,8 @@ GHCi> runCheckpointed  (< 20) $ addTens 1
 GHCi> runCheckpointed  (< 10) $ addTens 1
 1
 
+> ... анализирует и модифицирует? значение, возвращаемое кодом, написанным после ...
+
 (Если ни возвращенное, ни сохраненные значения не подходят, 
 результатом должно быть первое из сохраненных значений; 
 если не было сохранено ни одного значения, то результатом должно быть возвращенное значение.)
@@ -848,13 +850,31 @@ GHCi> runCheckpointed  (< 10) $ addTens 1
 
 -- type Checkpointed a = (a -> [a]) -> [a]
 -- Cont resultType valueType -- runCont :: (a -> r) -> r
-type Checkpointed a = (a -> Cont [a] a) -> Cont [a] a
+-- type Checkpointed a = (a -> Cont [a] a) -> Cont [a] a
+type Checkpointed a = (a -> Cont a a) -> Cont a a
 
 runCheckpointed :: (a -> Bool) -> Checkpointed a -> a
-runCheckpointed predicate checkpointed = undefined -- runCont _ _
+runCheckpointed predicate checkpointed = runCont xz id where
+    xz = checkpointed foo
+    -- некая функция, которая проверяет значение и либо продолжает конт. либо рвет его
+    -- foo = (\x -> if predicate x then ok x else stop x) -- foo :: a -> Cont a a
+    -- ok = return -- ok :: Cont a a
+    foo x = Cont (\next -> if predicate $ next x then next x else x )
+
+{--
+test2 :: Integer -> Cont r Integer
+test2 x = callCC (\k -> do
+    a <- return 3
+    when (x > 100) (k 42) -- при выполнении условия здесь цепочка прерывается
+    -- иначе игнор выражения и переход на следующее
+    return (a + x))
+
+--}
+
+-- end of solution
 
 addTens :: Int -> Checkpointed Int
-addTens x1 checkpoint = do
+addTens x1 = \checkpoint -> do
     checkpoint x1
     let x2 = x1 + 10
     checkpoint x2     {- x2 = x1 + 10 -}
@@ -867,3 +887,113 @@ test29 = runCheckpointed (< 100) $ addTens 1 -- 31
 test30 = runCheckpointed  (< 30) $ addTens 1 -- 21
 test31 = runCheckpointed  (< 20) $ addTens 1 -- 11
 test32 = runCheckpointed  (< 10) $ addTens 1 -- 1
+
+
+{--
+Вычисление в монаде `Cont` передает результат своей работы в функцию-продолжение. 
+А что, если наши вычисления могут завершиться с ошибкой? 
+В этом случае мы могли бы явно возвращать значение типа `Either` и 
+каждый раз обрабатывать два возможных исхода, что не слишком удобно. 
+Более разумный способ решения этой проблемы предоставляют трансформеры монад, но с ними мы познакомимся немного позже.
+
+Определите тип данных `FailCont` для вычислений, которые 
+получают два продолжения и 
+вызывают одно из них в случае успеха, а другое — при неудаче. 
+
+Сделайте его представителем класса типов `Monad` и 
+реализуйте вспомогательные функции `toFailCont` и `evalFailCont`, 
+используемые в следующем коде:
+
+add :: Int -> Int -> FailCont r e Int
+add x y = FailCont $ \ok _ -> ok $ x + y
+
+addInts :: String -> String -> FailCont r ReadError Int
+addInts s1 s2 = do
+  i1 <- toFailCont $ tryRead s1
+  i2 <- toFailCont $ tryRead s2
+  return $ i1 + i2
+
+(Здесь используется функция `tryRead` из предыдущего урока; определять её заново не надо.)
+
+GHCi> evalFailCont $ addInts "15" "12"
+Right 27
+GHCi> runFailCont (addInts "15" "") print (putStrLn . ("Oops: " ++) . show)
+Oops: EmptyInput
+
+newtype Cont r a = Cont { runCont :: (a -> r) -> r }
+evalCont m = runCont m id -- evalCont :: Cont r r -> r
+instance Monad (Cont r) where
+    return :: a -> Cont r a
+    return x = Cont (\c -> c x)
+    (>>=) :: Cont r a -> (a -> Cont r b) -> Cont r b
+    (Cont v) >>= k = Cont (\c -> v (\a -> runCont (k a) c)) -- bind v k c = v (\a -> k a c)
+--}
+-- import qualified Control.Monad.Trans.Except as TE
+-- import Control.Monad
+newtype FailCont r e a = FailCont { runFailCont :: (a -> r) -> (e -> r) -> r }
+
+toFailCont :: TE.Except e a -> FailCont r e a
+toFailCont ex = FailCont (\ vf ef -> either ef vf (TE.runExcept ex))
+
+evalFailCont :: FailCont (Either e a) e a -> Either e a
+evalFailCont fc = runFailCont fc Right Left
+
+instance Monad (FailCont r e) where
+    return :: a -> FailCont r e a
+    return x = FailCont (\ vf ef -> vf x)
+
+    (>>=) :: FailCont r e a -> (a -> FailCont r e b) -> FailCont r e b
+    -- ve, k: value-error, Kleisli (arrow)
+    -- vc, ec: value cont., error cont.
+    -- v, e: value, error
+    (FailCont ve) >>= k = FailCont (\ vc ec -> ve -- получаем два конт., запускаем левую монаду, внутри два продолжения:
+        (\v -> runFailCont (k v) vc ec) -- обработка значения, цепочка с правым параметром (Клейсли)
+        (\e -> ec e) -- обработка ошибки
+        )
+
+-- fmap = liftM, pure = return, (<*>) = ap
+instance Functor (FailCont r e) where
+    fmap :: (a -> b) -> FailCont r e a -> FailCont r e b
+    fmap = liftM
+
+instance Applicative (FailCont r e) where
+    pure :: a -> FailCont r e a
+    pure = return
+    (<*>) :: FailCont r e (a -> b) -> FailCont r e a -> FailCont r e b
+    (<*>) = ap
+
+-- end of solution
+
+add :: Int -> Int -> FailCont r e Int
+add x y = FailCont $ \ok _ -> ok $ x + y
+
+addInts :: String -> String -> FailCont r ReadError Int
+addInts s1 s2 = do
+  i1 <- toFailCont $ tryRead s1
+  i2 <- toFailCont $ tryRead s2
+  return $ i1 + i2
+
+test33 = evalFailCont $ addInts "15" "12" -- Right 27
+test34 = runFailCont (addInts "15" "") print (putStrLn . ("Oops: " ++) . show) -- Oops: EmptyInput
+
+
+{--
+Реализуйте функцию `callCFC` для монады `FailCont` по аналогии с `callCC`
+
+callCC :: ((a -> Cont r b) -> Cont r a) -> Cont r a
+callCC f = Cont (\c -> -- `c` это передаваемый снаружи "терминатор" (или следующее продолжение)
+    runCont (f (\k -> Cont (\_ -> c k))) c
+    ) -- f это наша лямбда, где у нас две ветки:
+    -- либо дергаем k (выход из конт.), либо не дергаем (продолжаем цепочку)
+    -- когда дергаем: игнорим дальнейший конт, что закрывает цепочку.
+
+newtype FailCont r e a = FailCont { runFailCont :: (a -> r) -> (e -> r) -> r }
+--}
+
+callCFC :: ((a -> FailCont r e b) -> FailCont r e a) -> FailCont r e a
+-- callCFC f = FailCont (\ ok err ->
+--     runFailCont (f 
+--         (\k -> FailCont (\ _ _ -> ok k)) -- рвем цепочку, игнорим продолжения
+--         ) ok err)
+callCFC f = FailCont $ \c -> 
+    runFailCont (f $ \a -> FailCont $ \_ _ -> c a) c
