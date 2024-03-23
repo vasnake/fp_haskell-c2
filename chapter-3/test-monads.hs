@@ -81,8 +81,11 @@ import Prelude (
     foldr, foldl, Either(..), Monoid(..), Semigroup(..), putStrLn, print, (*), (>), (/), (^),
     map, (=<<), (>>=), return, flip, (++), fail, Ord(..), (>>), take, Monad(..),
     Double, either, Integer, head, tail, IO(..), Read(..), ReadS(..), read, reads,
-    zip, odd, even, div, (&&),
+    zip, odd, even, div, (&&), (||),
     )
+
+import Debug.Trace ( trace, )
+debug = flip trace
 
 newtype Except e a = Except { runExcept :: Either e a } deriving Show
 except :: Either e a -> Except e a
@@ -1341,7 +1344,6 @@ test41 = runMyRWT veryComplexComputation ["abc","defg","hij"] -- Nothing
 test42 = runMyRWT veryComplexComputation ["abc","defg","hij","kl"] -- Just (("KL","HIJ"),"defg,abc")
 
 
-
 {--
 Предположим мы хотим исследовать свойства рекуррентных последовательностей.
 Рекуррентные отношения будем задавать вычислениями типа
@@ -1393,24 +1395,37 @@ tickCollatz :: State Integer Integer
 tickCollatz = do
   n <- get
   let res = if odd n then 3 * n + 1 else n `div` 2
-  put res
-  return n
+  put res -- `debug` (printf "new state: %d" res)
+  return n -- `debug` (printf "value: %d, state: %d" n res)
 
-type EsSi = TE.ExceptT String (State Integer) -- err:string, value:(state:(int,a))
--- State :: (s -> (s, a)) -> State s a
+type EsSi = TE.ExceptT String (State Integer) -- err:string, value:(state:(int,a)) -- State :: (s -> (s, a)) -> State s a
 
 runEsSi :: EsSi a -> Integer -> (Either String a, Integer)
 runEsSi = runState . TE.runExceptT
 
-go :: Integer -> Integer -> State Integer Integer -> EsSi ()
+go :: Integer -> Integer -> State Integer Integer -> EsSi () -- есть стейт, получить надо иксепт(стейт)
 go lowB uppB st = do -- step as state input
-    x <- lift get
-    if x > uppB then TE.throwE "Upper bound" else
-        if x < lowB then TE.throwE "Lower bound" else return ()
+    v <- lift st -- запустили вычисление, получили результат
+    s <- lift get -- взяли обновленный стейт на посмотреть
+    when (s >= uppB || v >= uppB) (TE.throwE "Upper bound")
+    when (s <= lowB || v <= lowB) (TE.throwE "Lower bound")
+
 {--
-ghci> runState tickCollatz $ 27
-(27,82)
+ghci> runEsSi (go 1 80 tickCollatz) 27 -- (Left "Upper bound",82)
+(Left "value: 27, state: 82",82)
+https://stackoverflow.com/questions/12550276/haskell-debug-print-in-if-block
+
+runEsSi :: EsSi a -> Integer -> (Either String a, Integer)
+runEsSi = runState . runExceptT
+go :: Integer -> Integer -> State Integer Integer -> EsSi ()
+go lower upper next = do
+  lift next
+  n <- lift get
+  when (n <= lower) (throwE "Lower bound")
+  when (n >= upper) (throwE "Upper bound")
+
 --}
+
 -- end of solution
 
 test43 = runEsSi (go 1 85 tickCollatz) 27 -- (Right (),82)

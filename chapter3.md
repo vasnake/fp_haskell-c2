@@ -2186,8 +2186,6 @@ test
 ### 3.3.11 test
 
 ```hs
-https://stepik.org/lesson/31556/step/11?unit=11810
-TODO
 {--
 Предположим мы хотим исследовать свойства рекуррентных последовательностей.
 Рекуррентные отношения будем задавать вычислениями типа
@@ -2248,6 +2246,49 @@ go :: Integer -> Integer -> State Integer Integer -> EsSi ()
 go = undefined
 
 -- solution
+
+import Control.Monad
+import Control.Monad.Trans
+import Control.Monad.Trans.State
+import Control.Monad.Trans.Except
+import qualified Control.Monad.Trans.Except as TE
+
+tickCollatz :: State Integer Integer
+tickCollatz = do
+  n <- get
+  let res = if odd n then 3 * n + 1 else n `div` 2
+  put res -- `debug` (printf "new state: %d" res)
+  return n -- `debug` (printf "value: %d, state: %d" n res)
+
+type EsSi = TE.ExceptT String (State Integer)
+-- err:string, value:(state:(int,a))
+-- State :: (s -> (s, a)) -> State s a
+
+runEsSi :: EsSi a -> Integer -> (Either String a, Integer)
+runEsSi = runState . TE.runExceptT
+
+go :: Integer -> Integer -> State Integer Integer -> EsSi () -- есть стейт, получить надо иксепт(стейт)
+go lowB uppB st = do -- step as state input
+    v <- lift st -- запустили вычисление, получили результат
+    s <- lift get -- взяли обновленный стейт на посмотреть
+    when (s >= uppB || v >= uppB) (TE.throwE "Upper bound") -- самая жопа это здесь
+    when (s <= lowB || v <= lowB) (TE.throwE "Lower bound")
+
+-- alternatives
+
+runEsSi = runState . runExceptT
+go lower upper next = do
+  lift next
+  n <- lift get
+  when (n <= lower) (throwE "Lower bound")
+  when (n >= upper) (throwE "Upper bound")
+
+runEsSi = runState . runExceptT
+go low high action = do
+  void $ lift action
+  current <- MTL.get
+  when (current <= low)  $ MTL.throwError "Lower bound"
+  when (current >= high) $ MTL.throwError "Upper bound"
 
 ```
 test

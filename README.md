@@ -128,3 +128,4 @@ applicative vs monad
 - Understanding Functional Dependencies via Constraint Handling Rules https://www.google.com/search?q=Understanding+Functional+Dependencies+via+Constraint+Handling+Rules
 - Functional dependencies https://wiki.haskell.org/Functional_dependencies
 - creating data structures like cyclic or doubly linked lists https://wiki.haskell.org/Tying_the_Knot
+- debug print https://stackoverflow.com/questions/12550276/haskell-debug-print-in-if-block
