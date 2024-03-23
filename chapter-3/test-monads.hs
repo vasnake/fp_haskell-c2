@@ -23,6 +23,7 @@
 {-# HLINT ignore "Avoid lambda" #-}
 {-# OPTIONS_GHC -Wno-simplifiable-class-constraints #-}
 {-# HLINT ignore "Eta reduce" #-}
+{-# HLINT ignore "Redundant if" #-}
 
 module TestMonads where
 
@@ -31,7 +32,7 @@ import Text.Read ( readMaybe, readEither, )
 
 import Data.Char ( toLower, toUpper )
 import Data.Function ( (&) )
-import Data.List ( (++), map, (!!), head, tail, )
+import Data.List ( (++), map, (!!), head, tail, filter, length, partition, )
 import Text.Printf ( printf, )
 
 import Data.Monoid (
@@ -54,7 +55,7 @@ import Data.Traversable (
     sequence, sequenceA, Traversable(..), traverse, fmapDefault, foldMapDefault, mapM
     )
 
-import Control.Monad ( liftM, mplus, guard, mfilter, ap, guard, MonadPlus(..), when, )
+import Control.Monad ( liftM, mplus, guard, mfilter, ap, guard, MonadPlus(..), when, forever, )
 -- import Control.Monad.Cont ( callCC )
 -- import Control.Monad (liftM, ap, MonadPlus(..), guard, msum)
 -- import Control.Applicative (Alternative(..))
@@ -63,10 +64,14 @@ import Control.Monad ( liftM, mplus, guard, mfilter, ap, guard, MonadPlus(..), w
 -- import Control.Monad.Trans.Reader as TR ( asks)
  -- ( ask, asks, Reader(..), ReaderT(..) )
 
-import Control.Monad.Trans.Writer ( runWriter, tell, Writer )
+import Control.Monad.Trans.Writer ( runWriter, tell, Writer, )
+import qualified Control.Monad.Trans.Writer as TW
+import qualified Control.Monad.Trans.Reader as TR
 -- import Control.Monad.Trans ( lift )
 import Control.Monad.Trans.Class
 import qualified Control.Monad.Trans.Except as TE
+-- import Control.Monad.Trans.Except
+import Control.Monad.Trans.State
 
 -- import GHC.Show (Show)
 -- import GHC.Base (Eq)
@@ -76,7 +81,7 @@ import Prelude (
     foldr, foldl, Either(..), Monoid(..), Semigroup(..), putStrLn, print, (*), (>), (/), (^),
     map, (=<<), (>>=), return, flip, (++), fail, Ord(..), (>>), take, Monad(..),
     Double, either, Integer, head, tail, IO(..), Read(..), ReadS(..), read, reads,
-    zip,
+    zip, odd, even, div, (&&),
     )
 
 newtype Except e a = Except { runExcept :: Either e a } deriving Show
@@ -854,12 +859,12 @@ GHCi> runCheckpointed  (< 10) $ addTens 1
 type Checkpointed a = (a -> Cont a a) -> Cont a a
 
 runCheckpointed :: (a -> Bool) -> Checkpointed a -> a
-runCheckpointed predicate checkpointed = runCont xz id where
-    xz = checkpointed foo
+runCheckpointed predicate checkpointed = runCont interruptable id where
+    interruptable = checkpointed breakOnCondition
     -- некая функция, которая проверяет значение и либо продолжает конт. либо рвет его
     -- foo = (\x -> if predicate x then ok x else stop x) -- foo :: a -> Cont a a
     -- ok = return -- ok :: Cont a a
-    foo x = Cont (\next -> if predicate $ next x then next x else x )
+    breakOnCondition currX = Cont (\f -> let nextX = f currX in if predicate nextX then nextX else currX )
 
 {--
 test2 :: Integer -> Cont r Integer
@@ -995,5 +1000,420 @@ callCFC :: ((a -> FailCont r e b) -> FailCont r e a) -> FailCont r e a
 --     runFailCont (f 
 --         (\k -> FailCont (\ _ _ -> ok k)) -- рвем цепочку, игнорим продолжения
 --         ) ok err)
-callCFC f = FailCont $ \c -> 
+callCFC f = FailCont $ \c ->
     runFailCont (f $ \a -> FailCont $ \_ _ -> c a) c
+
+
+{--
+Перепишите функцию `logFirstAndRetSecond` из предыдущего видео, 
+используя трансформер `WriterT` из модуля `Control.Monad.Trans.Writer` библиотеки `transformers`, и 
+монаду `Reader` в качестве базовой.
+
+GHCi> runReader (runWriterT logFirstAndRetSecond) strings
+("DEFG","abc")
+
+logFirstAndRetSecond :: 
+    ReaderT [String]    -- трансформер, внешняя монада
+    (Writer String)     -- внутренняя монада (параметр трансформера)
+    String              -- возвращаемый композицией тип
+logFirstAndRetSecond = do
+    el1 <- asks head
+    el2 <- asks (map toUpper . head . tail)
+    lift (tell el1) -- подъем из (в) внутренней монады -- можно читать как "поднять API внутренней монады"
+    return el2
+
+--}
+-- import Control.Monad.Trans.Reader
+-- import Control.Monad.Trans.Writer
+-- import Control.Monad.Trans
+-- import Data.Char
+-- import qualified Control.Monad.Trans.Writer as TW
+-- import qualified Control.Monad.Trans.Reader as TR
+
+logFirstAndRetSecond2 :: TW.WriterT String (TR.Reader [String]) String
+logFirstAndRetSecond2 = do
+    ss <- lift TR.ask
+    tell $ head ss
+    return (map toUpper . head . tail $ ss)
+
+{--
+ghci> :t WriterT
+WriterT :: m (a, w) -> WriterT w m a
+
+ghci> :k WriterT String (Reader [String]) String
+WriterT String (Reader [String]) String :: *
+ghci> :t Reader
+Reader :: (r -> a) -> Reader r a
+--}
+test35 = TR.runReader (TW.runWriterT logFirstAndRetSecond2) strings -- ("DEFG","abc")
+
+
+{--
+Реализуйте функцию 
+separate :: (a -> Bool) -> (a -> Bool) -> [a] -> WriterT [a] (Writer [a]) [a]
+
+Эта функция принимает
+два предиката и список
+и записывает:
+- в один лог элементы списка, удовлетворяющие первому предикату, 
+- в другой лог — второму предикату;
+а возвращающает список элементов, ни одному из них не удовлетворяющих.
+
+GHCi> (runWriter . runWriterT) $ separate (<3) (>7) [0..10]
+(([3,4,5,6,7],[0,1,2]),[8,9,10])
+--}
+-- import qualified Control.Monad.Trans.Writer as TW
+separate :: (a -> Bool) -> (a -> Bool) -> [a] -> TW.WriterT [a] (TW.Writer [a]) [a]
+separate p1 p2 [] = return []
+separate p1 p2 (x:xs) = do
+    when (p1 x) (tell [x])
+    when (p2 x) (lift $ tell [x])
+    -- if p1 x then tell [x] else (when (p2 x) $ lift $ tell [x])
+    -- if p1 x then tell [x] else (if p2 x then lift $ tell [x] else return ())
+    h <- if p1 x then return [] else (if p2 x then return [] else return [x])
+    rest <- separate p1 p2 xs
+    return $ h ++ rest
+
+test36 = (TW.runWriter . TW.runWriterT) $ separate (< 3) (> 7) [0 .. 10] -- (([3,4,5,6,7],[0,1,2]),[8,9,10])
+test37 = (TW.runWriter . TW.runWriterT) $ separate (< 3) (< 7) [0 .. 10] -- (([7,8,9,10],[0,1,2]),[0,1,2,3,4,5,6])
+
+{--
+separate pred1 pred2 = filterM $ \x -> do
+    when (pred1 x) $        tell [x]
+    when (pred2 x) $ lift $ tell [x]
+    return $ not (pred1 x) && not (pred2 x)
+
+separate p1 p2 lst = do
+  mapM_ (tell . return) $ filter p1 lst
+  mapM_ (lift . tell . return) $ filter p2 lst
+  return $ filter (not. or. sequenceA [p1, p2]) lst
+
+import           Data.Maybe           (catMaybes)
+separate p1 p2 = fmap catMaybes . mapM analyze where
+    analyze x = do
+      when (p1 x) $ tell [x]
+      when (p2 x) $ lift $ tell [x]
+      return $ mfilter (not . or . sequenceA [p1 , p2]) $ Just x
+
+separate p1 p2 xs = do
+  tell $ filter p1 xs
+  lift $ tell $ filter p2 xs
+  return $ filter (\x -> (not . or) [p1 x, p2 x]) xs
+
+separate p1 p2 xs = foldM help [] xs where
+    help rs x = do
+      when (p1 x) (tell [x])
+      when (p2 x) (lift $ tell [x])
+      if (p1 x || p2 x) then return rs else return $ rs ++ [x]
+
+--}
+
+{--
+Наша абстракция пока что недостаточно хороша, поскольку пользователь всё ещё должен помнить такие детали, как, например, то, что 
+`asks` нужно вызывать напрямую, а `tell` — только с помощью `lift`.
+
+Нам хотелось бы скрыть такие детали реализации, обеспечив унифицированный интерфейс доступа к 
+возможностям нашей монады, связанным с чтением окружения, и к возможностям, связанным с записью в лог. 
+Для этого реализуйте функции
+`myAsks` и `myTell`, позволяющие записать `logFirstAndRetSecond` следующим образом:
+
+logFirstAndRetSecond :: MyRW String
+logFirstAndRetSecond = do
+  el1 <- myAsks head
+  el2 <- myAsks (map toUpper . head . tail)
+  myTell el1
+  return el2
+--}
+-- type MyRW = ReaderT [String] (Writer String)
+myAsks :: ([String] -> a) -> MyRW a
+myAsks f = do
+    asks f
+
+myTell :: String -> MyRW ()
+myTell s = do
+    lift (tell s)
+
+-- end of solution
+
+logFirstAndRetSecond3 :: MyRW String
+logFirstAndRetSecond3 = do
+  el1 <- myAsks head
+  el2 <- myAsks (map toUpper . head . tail)
+  myTell el1
+  return el2
+
+{--
+myAsks = asks
+myTell = lift.tell
+
+import qualified Control.Monad.Reader as MTL
+import qualified Control.Monad.Writer as MTL
+myAsks = MTL.asks
+myTell = MTL.tell
+
+myAsks f = ask >>= (return . f)
+myTell = lift . tell
+--}
+
+
+{--
+Превратите монаду `MyRW` в трансформер монад `MyRWT`:
+
+logFirstAndRetSecond :: MyRWT IO String
+logFirstAndRetSecond = do
+  el1 <- myAsks head
+  myLift $ putStrLn $ "First is " ++ show el1
+  el2 <- myAsks (map toUpper . head . tail)
+  myLift $ putStrLn $ "Second is " ++ show el2
+  myTell el1
+  return el2
+
+GHCi> runMyRWT logFirstAndRetSecond ["abc","defg","hij"]
+First is "abc"
+Second is "DEFG"
+("DEFG","abc")
+
+type MyRW = ReaderT [String] (Writer String)
+runMyRW :: MyRW a -> [String] -> (a, String)
+runMyRW rw e = runWriter (runReaderT rw e)
+myAsks :: ([String] -> a) -> MyRW a
+myTell :: String -> MyRW ()
+--}
+-- import qualified Control.Monad.Trans.Writer as TW
+-- import qualified Control.Monad.Trans.Reader as TR
+-- import Control.Monad.Trans.Class
+type MyRWT m = TR.ReaderT [String] (TW.WriterT String m)
+
+runMyRWT :: MyRWT m a -> [String] -> m (a, String)
+runMyRWT rw e = TW.runWriterT (TR.runReaderT rw e)
+
+myAsks2 :: (Monad m)=> ([String] -> a) -> MyRWT m a
+myAsks2 = TR.asks -- TR.reader
+-- ghci> :t TR.asks
+-- TR.asks :: Monad m => (r -> a) -> TR.ReaderT r m a
+
+myTell2 :: (Monad m)=> String -> MyRWT m ()
+myTell2 = lift . tell
+
+myLift :: (Monad m)=> m a -> MyRWT m a
+myLift = lift . lift
+
+-- end of solution
+
+logFirstAndRetSecond4 :: MyRWT IO String
+logFirstAndRetSecond4 = do
+  el1 <- myAsks2 head
+  myLift $ putStrLn $ "First is " ++ show el1
+  el2 <- myAsks2 (map toUpper . head . tail)
+  myLift $ putStrLn $ "Second is " ++ show el2
+  myTell2 el1
+  return el2
+
+test38 = runMyRWT logFirstAndRetSecond4 ["abc","defg","hij"] -- First is "abc" -- Second is "DEFG" -- ("DEFG","abc")
+
+{--
+import           Control.Monad.Reader as MTL
+import           Control.Monad.Writer as MTL
+type MyRWT m = ReaderT [String] (WriterT String m)
+runMyRWT :: MyRWT m a -> [String] -> m (a, String)
+runMyRWT = (runWriterT .). runReaderT
+myAsks :: Monad m => ([String] -> a) -> MyRWT m a
+myAsks = MTL.asks
+myTell :: Monad m => String -> MyRWT m ()
+myTell = MTL.tell
+myLift :: Monad m => m a -> MyRWT m a
+myLift = lift . lift
+ --}
+
+
+{--
+С помощью трансформера монад `MyRWT` мы можем написать безопасную версию `logFirstAndRetSecond`:
+
+logFirstAndRetSecond :: MyRWT Maybe String
+logFirstAndRetSecond = do
+  xs <- myAsk
+  case xs of
+    (el1 : el2 : _) -> myTell el1 >> return (map toUpper el2)
+    _ -> myLift Nothing
+
+GHCi> runMyRWT logFirstAndRetSecond ["abc","defg","hij"]
+Just ("DEFG","abc")
+GHCi> runMyRWT logFirstAndRetSecond ["abc"]
+Nothing
+
+Реализуйте безопасную функцию `veryComplexComputation`, 
+записывающую в лог через запятую первую строку четной длины и первую строку нечетной длины, 
+а возвращающую пару из второй строки четной и второй строки нечетной длины,
+приведенных к верхнему регистру:
+
+GHCi> runMyRWT veryComplexComputation ["abc","defg","hij"]
+Nothing
+GHCi> runMyRWT veryComplexComputation ["abc","defg","hij","kl"]
+Just (("KL","HIJ"),"defg,abc")
+
+Подсказка: возможно, полезно будет реализовать функцию `myWithReader`
+https://hoogle.haskell.org/?hoogle=withReader&scope=set%3Ahaskell-platform
+ghci> :i TR.withReader
+TR.withReader :: (r' -> r) -> TR.Reader r a -> TR.Reader r' a -- Defined in ‘Control.Monad.Trans.Reader’
+
+partition even [1..10] -- ([2,4,6,8,10],[1,3,5,7,9])
+--}
+
+-- import qualified Control.Monad.Trans.Reader as TR
+-- import Data.List ( (++), map, (!!), head, tail, filter, length, partition, )
+veryComplexComputation :: MyRWT Maybe (String, String)
+veryComplexComputation = do
+    ss <- myAsk2
+    let (evens, odds) = partition (even . length) ss
+    let up = map toUpper
+    case (evens, odds) of
+        (e1:e2:_, o1:o2:_) ->
+            myTell2 (e1 ++ "," ++ o1) >>
+            return (up e2, up o2)
+        _ -> myLift Nothing
+
+myAsk2 :: (Monad m)=> MyRWT m [String]
+myAsk2 = TR.ask -- TR.ask :: Monad m => TR.ReaderT r m r
+{--
+veryComplexComputation = do
+  s1 <- myWithReader (filter $ even . length) logFirstAndRetSecond
+  myTell ","
+  s2 <- myWithReader (filter $ odd  . length) logFirstAndRetSecond
+  return (s1, s2)
+myWithReader :: Monad m => ([String] -> [String]) -> MyRWT m a -> MyRWT m a
+myWithReader = withReaderT
+
+import Control.Arrow
+veryComplexComputation = do
+    (e1 : e2 : _, o1 : o2 : _) <- myAsks $ filter (even . length) &&& filter (odd . length)
+    myTell $ e1 ++ "," ++ o1
+    return $ (map toUpper e2, map toUpper o2)
+
+import Data.Foldable
+findTwo :: (a -> Bool) -> [a] -> Maybe (a, a)
+findTwo pr [] = Nothing
+findTwo pr (x : xs)
+  | pr x = Just ((,) x) <*> find pr xs
+  | otherwise = findTwo pr xs
+veryComplexComputation = do
+  q1 <- myAsks $ findTwo (even . length)
+  q2 <- myAsks $ findTwo (odd . length)
+  (e1, e2) <- myLift q1
+  (o1, o2) <- myLift q2
+  myTell (e1 ++ "," ++ o1)
+  return (map toUpper e2, map toUpper o2)
+
+import           Data.Monoid
+import           Control.Monad
+import qualified Control.Monad.Reader as MTL
+import qualified Control.Monad.Writer as MTL
+import           Data.Char
+headOpt::MonadPlus m=>[a]->m (a, [a])
+headOpt (x:xs) = return (x, xs)
+headOpt []     = mzero
+veryComplexComputation = do
+  odds <- MTL.asks (filter (odd.length))
+  evens <- MTL.asks (filter (even.length))
+  (o1, o2) <- getHeads odds
+  (e1, e2) <- getHeads evens
+  MTL.tell $ e1 <> "," <> o1
+  return (e2, o2) where
+    getHeads lst = do
+      (x, rest) <- headOpt lst
+      (y, _)    <- headOpt rest
+      return (x, toUpper <$> y)
+
+--}
+
+-- end of solution
+
+logFirstAndRetSecond5 :: MyRWT Maybe String
+logFirstAndRetSecond5 = do
+  xs <- myAsk2
+  case xs of
+    (el1 : el2 : _) -> myTell2 el1 >> return (map toUpper el2)
+    _ -> myLift Nothing
+
+test40 = runMyRWT logFirstAndRetSecond5 ["abc","defg","hij"] -- Just ("DEFG","abc")
+test39 = runMyRWT logFirstAndRetSecond5 ["abc"] -- Nothing
+
+test41 = runMyRWT veryComplexComputation ["abc","defg","hij"] -- Nothing
+test42 = runMyRWT veryComplexComputation ["abc","defg","hij","kl"] -- Just (("KL","HIJ"),"defg,abc")
+
+
+
+{--
+Предположим мы хотим исследовать свойства рекуррентных последовательностей.
+Рекуррентные отношения будем задавать вычислениями типа
+`State Integer Integer`,
+которые, будучи инициализированы текущим значением элемента последовательности, 
+возвращают следующее значение в качестве состояния и текущее в качестве возвращаемого значения, например:
+
+tickCollatz :: State Integer Integer
+tickCollatz = do
+  n <- get
+  let res = if odd n then 3 * n + 1 else n `div` 2
+  put res
+  return n
+
+Используя монаду `State` из модуля `Control.Monad.Trans.State` и 
+трансформер `ExceptT` из модуля `Control.Monad.Trans.Except` 
+библиотеки `transformers`,
+
+реализуйте для монады
+type EsSi = ExceptT String (State Integer)
+
+функцию 
+`runEsSi :: EsSi a -> Integer -> (Either String a, Integer)`
+
+запускающую вычисление в этой монаде, 
+а также функцию 
+`go :: Integer -> Integer -> State Integer Integer -> EsSi ()`
+
+принимающую шаг рекуррентного вычисления и два целых параметра,
+задающие нижнюю и верхнюю границы допустимых значений вычислений.
+Если значение больше или равно верхнему или меньше или равно нижнему,
+то оно прерывается исключением с соответствующим сообщением об ошибке
+
+GHCi> runEsSi (go 1 85 tickCollatz) 27
+(Right (),82)
+GHCi> runEsSi (go 1 80 tickCollatz) 27
+(Left "Upper bound",82)
+GHCi> runEsSi (forever $ go 1 1000 tickCollatz) 27
+(Left "Upper bound",1186)
+GHCi> runEsSi (forever $ go 1 10000 tickCollatz) 27
+(Left "Lower bound",1)
+--}
+-- import Control.Monad
+-- import Control.Monad.Trans
+-- import Control.Monad.Trans.State
+-- import Control.Monad.Trans.Except
+-- import qualified Control.Monad.Trans.Except as TE
+tickCollatz :: State Integer Integer
+tickCollatz = do
+  n <- get
+  let res = if odd n then 3 * n + 1 else n `div` 2
+  put res
+  return n
+
+type EsSi = TE.ExceptT String (State Integer) -- err:string, value:(state:(int,a))
+-- State :: (s -> (s, a)) -> State s a
+
+runEsSi :: EsSi a -> Integer -> (Either String a, Integer)
+runEsSi = runState . TE.runExceptT
+
+go :: Integer -> Integer -> State Integer Integer -> EsSi ()
+go lowB uppB st = do -- step as state input
+    x <- lift get
+    if x > uppB then TE.throwE "Upper bound" else
+        if x < lowB then TE.throwE "Lower bound" else return ()
+{--
+ghci> runState tickCollatz $ 27
+(27,82)
+--}
+-- end of solution
+
+test43 = runEsSi (go 1 85 tickCollatz) 27 -- (Right (),82)
+test44 = runEsSi (go 1 80 tickCollatz) 27 -- (Left "Upper bound",82)
+test45 = runEsSi (forever $ go 1 1000 tickCollatz) 27 -- (Left "Upper bound",1186)
+test46 = runEsSi (forever $ go 1 10000 tickCollatz) 27 -- (Left "Lower bound",1)

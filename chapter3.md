@@ -1702,7 +1702,7 @@ https://stepik.org/lesson/31556/step/1?unit=11810
 - Трансформированная монада – это монада
 - Стандартные монады – это трансформеры
 
-### 3.3.2 два вычисления с разными эффектами
+### 3.3.2 вычисление с двумя эффектами
 
 Аппликативные функторы и монады позволяют выполнять вычисления с эффектами.
 Что делать, если эффектов нам надо несколько?
@@ -1713,11 +1713,11 @@ https://stepik.org/lesson/31556/step/1?unit=11810
 С монадами сложнее, композиция монад (в общем случае) не будет монадой.
 Слишком сложная структура и поведение (зависимость структуры от вычислений).
 
-Есть обходные пути, один из них: трансформер монад.
+Есть обходные пути, один из них: трансформеры монад.
 
 Подготовим песочницу для разбора трансформеров.
 Подготовим два вычисления с разными эффектами.
-Вернее, вычисление одно (вернуть второй элемент списка), но эффекты разные.
+Вернее, вычисление одно (вернуть второй элемент списка), но эффектов два.
 ```hs
 -- transformers, setup
 import Control.Monad.Trans.Reader
@@ -1756,36 +1756,37 @@ repl
 
 ### 3.3.3 композиция монад через трансформер
 
+Композиция реализуется через "матрешку", одна монада помещается внутрь другой.
+
 Одна монада (врайтер) объявляется внутренней.
 Вторая (ридер) объявляется трансформером (суффикс T).
 ```hs
 logFirstAndRetSecond :: 
     ReaderT [String]    -- трансформер, внешняя монада
-    (Writer String)     -- внутренняя монада
+    (Writer String)     -- внутренняя монада (параметр трансформера)
     String              -- возвращаемый композицией тип
 logFirstAndRetSecond = do
     el1 <- asks head
     el2 <- asks (map toUpper . head . tail)
-    lift (tell el1) -- подъем из внутренней монады
-    -- можно читать как "поднять API внутренней монады"
+    lift (tell el1) -- подъем из (в) внутренней монады -- можно читать как "поднять API внутренней монады"
     return el2
 
 -- Как этим пользоваться?
 
--- одно-параметрический тип, годится для подстановки в трансформер
-ghci> :k Writer String
+ghci> :k Writer String -- одно-параметрический тип, годится для подстановки в трансформер
 Writer String :: * -> *
 
 -- эволюция кайндов
-ghci> :k Reader
+ghci> :k Reader -- монада
 Reader :: * -> * -> * -- двух-параметрический
 ghci> :k Reader [String]
 Reader [String] :: * -> * -- одно-параметрический
-ghci> :k ReaderT [String]
+
+ghci> :k ReaderT [String] -- трансформер
 ReaderT [String] :: (* -> *) -> * -> * -- двух-параметрический, конструктор монады
 -- принимает монаду `(* -> *)`
 -- и возвращает монаду `* -> *`
-ghci> :k ReaderT [String] (Writer String)
+ghci> :k ReaderT [String] (Writer String) -- монада
 ReaderT [String] (Writer String) :: * -> * -- одно-параметрический, монада
 
 -- как это запускать?
@@ -1804,9 +1805,9 @@ ghci> runWriter (runReaderT logFirstAndRetSecond strings) -- окружение 
 ```
 repl
 
+### 3.3.4 test
+
 ```hs
-https://stepik.org/lesson/31556/step/4?unit=11810
-TODO
 {--
 Перепишите функцию `logFirstAndRetSecond` из предыдущего видео, 
 используя трансформер `WriterT` из модуля `Control.Monad.Trans.Writer` библиотеки `transformers`, и 
@@ -1820,19 +1821,46 @@ logFirstAndRetSecond = undefined
 
 -- solution
 
+import Control.Monad.Trans.Reader
+import Control.Monad.Trans.Writer
+import Control.Monad.Trans
+import Data.Char
+import qualified Control.Monad.Trans.Writer as TW
+import qualified Control.Monad.Trans.Reader as TR
+
+logFirstAndRetSecond :: TW.WriterT String (TR.Reader [String]) String
+logFirstAndRetSecond = do
+    ss <- lift TR.ask
+    tell $ head ss
+    return (map toUpper . head . tail $ ss)
+
+-- alternatives
+
+import           Control.Monad.Reader
+import           Control.Monad.Writer
+import           Data.Char
+logFirstAndRetSecond :: WriterT String (Reader [String]) String
+logFirstAndRetSecond = do -- используется неявный лифтинг
+  el1 <- asks head
+  el2 <- asks (map toUpper.head.tail)
+  tell el1
+  return el2
+
 ```
 test
 
+### 3.3.5 test
+
 ```hs
-https://stepik.org/lesson/31556/step/5?unit=11810
-TODO
 {--
 Реализуйте функцию 
 separate :: (a -> Bool) -> (a -> Bool) -> [a] -> WriterT [a] (Writer [a]) [a]
 
-Эта функция принимает два предиката и список и 
-записывает в один лог элементы списка, удовлетворяющие первому предикату, 
-в другой лог — второму предикату, 
+Эта функция принимает
+два предиката и список
+и записывает:
+- в один лог элементы списка, удовлетворяющие первому предикату, 
+- в другой лог — второму предикату;
 а возвращающает список элементов, ни одному из них не удовлетворяющих.
 
 GHCi> (runWriter . runWriterT) $ separate (<3) (>7) [0..10]
@@ -1843,14 +1871,56 @@ separate = undefined
 
 -- solution
 
+import qualified Control.Monad.Trans.Writer as TW
+separate :: (a -> Bool) -> (a -> Bool) -> [a] -> TW.WriterT [a] (TW.Writer [a]) [a]
+separate p1 p2 [] = return []
+separate p1 p2 (x:xs) = do
+    when (p1 x) (tell [x])
+    when (p2 x) (lift $ tell [x])
+    h <- if p1 x then return [] else (if p2 x then return [] else return [x])
+    rest <- separate p1 p2 xs
+    return $ h ++ rest
+
+-- alternatives
+
+separate pred1 pred2 = filterM $ \x -> do -- гениально
+    when (pred1 x) $        tell [x]
+    when (pred2 x) $ lift $ tell [x]
+    return $ not (pred1 x) && not (pred2 x)
+
+import           Data.Maybe           (catMaybes)
+separate p1 p2 = fmap catMaybes . mapM analyze where
+    analyze x = do
+      when (p1 x) $ tell [x]
+      when (p2 x) $ lift $ tell [x]
+      return $ mfilter (not . or . sequenceA [p1 , p2]) $ Just x
+
+separate p1 p2 lst = do
+  mapM_ (tell . return) $ filter p1 lst
+  mapM_ (lift . tell . return) $ filter p2 lst
+  return $ filter (not. or. sequenceA [p1, p2]) lst
+
+separate p1 p2 xs = do
+  tell $ filter p1 xs
+  lift $ tell $ filter p2 xs
+  return $ filter (\x -> (not . or) [p1 x, p2 x]) xs
+
+separate p1 p2 xs = foldM help [] xs where
+    help rs x = do
+      when (p1 x) (tell [x])
+      when (p2 x) (lift $ tell [x])
+      if (p1 x || p2 x) then return rs else return $ rs ++ [x]
+
 ```
 test
 
 ### 3.3.6 удобная обвязка композиции в трансформере
 
-Из трансформера вышел сложный интерфейс, мы хотим его замаскировать.
+Из трансформера вышел сложный интерфейс, мы хотим его замаскировать (убрать лифты).
+
 Сделаем вид, что у нас есть монада `MyRW`
 ```hs
+-- было так
 ghci> runWriter (runReaderT logFirstAndRetSecond strings)
 ("CD","ab")
 
@@ -1889,16 +1959,17 @@ ghci> runMyRW logFirstAndRetSecond strings
 ```
 repl
 
+### 3.3.7 test
+
 ```hs
-https://stepik.org/lesson/31556/step/7?unit=11810
-TODO
 {--
 Наша абстракция пока что недостаточно хороша, поскольку пользователь всё ещё должен помнить такие детали, как, например, то, что 
 `asks` нужно вызывать напрямую, а `tell` — только с помощью `lift`.
 
 Нам хотелось бы скрыть такие детали реализации, обеспечив унифицированный интерфейс доступа к 
 возможностям нашей монады, связанным с чтением окружения, и к возможностям, связанным с записью в лог. 
-Для этого реализуйте функции `myAsks` и `myTell`, позволяющие записать `logFirstAndRetSecond` следующим образом:
+Для этого реализуйте функции
+`myAsks` и `myTell`, позволяющие записать `logFirstAndRetSecond` следующим образом:
 
 logFirstAndRetSecond :: MyRW String
 logFirstAndRetSecond = do
@@ -1914,6 +1985,27 @@ myTell :: String -> MyRW ()
 myTell = undefined
 
 -- solution
+
+myAsks :: ([String] -> a) -> MyRW a
+myAsks f = do
+    asks f
+
+myTell :: String -> MyRW ()
+myTell s = do
+    lift (tell s)
+
+-- alternatives
+
+myAsks = asks
+myTell = lift.tell
+
+import qualified Control.Monad.Reader as MTL
+import qualified Control.Monad.Writer as MTL
+myAsks = MTL.asks
+myTell = MTL.tell
+
+myAsks f = ask >>= (return . f)
+myTell = lift . tell
 
 ```
 test
@@ -1943,9 +2035,9 @@ reader :: Monad m => (r -> a) -> ReaderT r m a -- Defined in ‘Control.Monad.Tr
 ```
 repl
 
+### 3.3.9 test
+
 ```hs
-https://stepik.org/lesson/31556/step/9?unit=11810
-TODO
 {--
 Превратите монаду `MyRW` в трансформер монад `MyRWT`:
 
@@ -1979,12 +2071,38 @@ myLift = undefined
 
 -- solution
 
+import qualified Control.Monad.Trans.Writer as TW
+import qualified Control.Monad.Trans.Reader as TR
+type MyRWT m = TR.ReaderT [String] (TW.WriterT String m)
+runMyRWT :: MyRWT m a -> [String] -> m (a, String)
+runMyRWT rw e = TW.runWriterT (TR.runReaderT rw e)
+myAsks :: (Monad m)=> ([String] -> a) -> MyRWT m a
+myAsks = TR.reader
+myTell :: (Monad m)=> String -> MyRWT m ()
+myTell = lift . tell
+myLift :: (Monad m)=> m a -> MyRWT m a
+myLift = lift . lift
+
+-- alternatives
+
+import           Control.Monad.Reader as MTL
+import           Control.Monad.Writer as MTL
+type MyRWT m = ReaderT [String] (WriterT String m)
+runMyRWT :: MyRWT m a -> [String] -> m (a, String)
+runMyRWT = (runWriterT . ) . runReaderT
+myAsks :: Monad m => ([String] -> a) -> MyRWT m a
+myAsks = MTL.asks
+myTell :: Monad m => String -> MyRWT m ()
+myTell = MTL.tell
+myLift :: Monad m => m a -> MyRWT m a
+myLift = lift . lift
+
 ```
 test
 
+### 3.3.10 test
+
 ```hs
-https://stepik.org/lesson/31556/step/10?unit=11810
-TODO
 {--
 С помощью трансформера монад `MyRWT` мы можем написать безопасную версию `logFirstAndRetSecond`:
 
@@ -2002,7 +2120,8 @@ Nothing
 
 Реализуйте безопасную функцию `veryComplexComputation`, 
 записывающую в лог через запятую первую строку четной длины и первую строку нечетной длины, 
-а возвращающую пару из второй строки четной и второй строки нечетной длины, приведенных к верхнему регистру:
+а возвращающую пару из второй строки четной и второй строки нечетной длины,
+приведенных к верхнему регистру:
 
 GHCi> runMyRWT veryComplexComputation ["abc","defg","hij"]
 Nothing
@@ -2017,16 +2136,62 @@ veryComplexComputation = undefined
 
 -- solution
 
+import qualified Control.Monad.Trans.Reader as TR
+import Data.List
+
+veryComplexComputation :: MyRWT Maybe (String, String)
+veryComplexComputation = do
+    ss <- myAsk -- strings
+    let (evens, odds) = partition (even . length) ss -- разобрали по длине, получили пару списков
+    let up = map toUpper -- хелпер
+    case (evens, odds) of
+        (e1:e2:_, o1:o2:_) -> -- пат.мат. на 4 элемента
+            myTell (e1 ++ "," ++ o1) >>
+            return (up e2, up o2)
+        _ -> myLift Nothing -- нету 4 элементов
+
+-- alternatives
+
+veryComplexComputation = do
+  s1 <- myWithReader (filter $ even . length) logFirstAndRetSecond
+  myTell ","
+  s2 <- myWithReader (filter $ odd  . length) logFirstAndRetSecond
+  return (s1, s2)
+myWithReader :: Monad m => ([String] -> [String]) -> MyRWT m a -> MyRWT m a
+myWithReader = withReaderT
+
+import Control.Arrow
+veryComplexComputation = do
+    (e1 : e2 : _, o1 : o2 : _) <- myAsks $ filter (even . length) &&& filter (odd . length)
+    myTell $ e1 ++ "," ++ o1
+    return $ (map toUpper e2, map toUpper o2)
+
+import Data.Foldable
+findTwo :: (a -> Bool) -> [a] -> Maybe (a, a)
+findTwo pr [] = Nothing
+findTwo pr (x : xs)
+  | pr x = Just ((,) x) <*> find pr xs
+  | otherwise = findTwo pr xs
+veryComplexComputation = do
+  q1 <- myAsks $ findTwo (even . length)
+  q2 <- myAsks $ findTwo (odd . length)
+  (e1, e2) <- myLift q1
+  (o1, o2) <- myLift q2
+  myTell (e1 ++ "," ++ o1)
+  return (map toUpper e2, map toUpper o2)
+
 ```
 test
+
+### 3.3.11 test
 
 ```hs
 https://stepik.org/lesson/31556/step/11?unit=11810
 TODO
 {--
-Предположим мы хотим исследовать свойства рекуррентных последовательностей. 
-Рекуррентные отношения будем задавать вычислениями типа 
-`State Integer Integer`, 
+Предположим мы хотим исследовать свойства рекуррентных последовательностей.
+Рекуррентные отношения будем задавать вычислениями типа
+`State Integer Integer`,
 которые, будучи инициализированы текущим значением элемента последовательности, 
 возвращают следующее значение в качестве состояния и текущее в качестве возвращаемого значения, например:
 
@@ -2048,8 +2213,10 @@ type EsSi = ExceptT String (State Integer)
 запускающую вычисление в этой монаде, 
 а также функцию 
 `go :: Integer -> Integer -> State Integer Integer -> EsSi ()`
-принимающую шаг рекуррентного вычисления и два целых параметра, задающие нижнюю и верхнюю границы допустимых значений вычислений. 
-Если значение больше или равно верхнему или меньше или равно нижнему, то оно прерывается исключением с соответствующим сообщением об ошибке
+принимающую шаг рекуррентного вычисления и два целых параметра,
+задающие нижнюю и верхнюю границы допустимых значений вычислений.
+Если значение больше или равно верхнему или меньше или равно нижнему,
+то оно прерывается исключением с соответствующим сообщением об ошибке
 
 GHCi> runEsSi (go 1 85 tickCollatz) 27
 (Right (),82)
@@ -2084,6 +2251,8 @@ go = undefined
 
 ```
 test
+
+### 3.3.12 test
 
 ```hs
 https://stepik.org/lesson/31556/step/12?unit=11810
