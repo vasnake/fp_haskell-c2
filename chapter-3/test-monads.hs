@@ -24,6 +24,7 @@
 {-# OPTIONS_GHC -Wno-simplifiable-class-constraints #-}
 {-# HLINT ignore "Eta reduce" #-}
 {-# HLINT ignore "Redundant if" #-}
+{-# HLINT ignore "Redundant flip" #-}
 
 module TestMonads where
 
@@ -44,7 +45,7 @@ import Data.Functor.Compose ( Compose(..) )
 import Data.Functor ( (<&>) )
 
 import Control.Applicative (
-    Alternative(..), Applicative(..), (<*>), (<$>), ZipList(..), (<**>), (<|>)
+    Alternative(..), Applicative(..), (<*>), (<$>), ZipList(..), (<**>), (<|>), liftA2,
     )
 
 import Data.Foldable (
@@ -81,7 +82,7 @@ import Prelude (
     foldr, foldl, Either(..), Monoid(..), Semigroup(..), putStrLn, print, (*), (>), (/), (^),
     map, (=<<), (>>=), return, flip, (++), fail, Ord(..), (>>), take, Monad(..),
     Double, either, Integer, head, tail, IO(..), Read(..), ReadS(..), read, reads,
-    zip, odd, even, div, (&&), (||),
+    zip, odd, even, div, (&&), (||), sqrt,
     )
 
 import Debug.Trace ( trace, )
@@ -1571,3 +1572,335 @@ test47 = runRiiEsSiT (forever $ go2 tickCollatz2) (1, 200) 27
 214
 (Left "Upper bound",214)
 --}
+
+
+{--
+В задачах из предыдущих модулей мы сталкивались с типами данных
+задающих вычисления с двумя и тремя окружениями соответственно
+
+newtype Arr2 e1 e2 a = Arr2 { getArr2 :: e1 -> e2 -> a }
+newtype Arr3 e1 e2 e3 a = Arr3 { getArr3 :: e1 -> e2 -> e3 -> a }
+
+Можно расширить их до трансформеров:
+
+newtype Arr2T e1 e2 m a = Arr2T { getArr2T :: e1 -> e2 -> m a }
+newtype Arr3T e1 e2 e3 m a = Arr3T { getArr3T :: e1 -> e2 -> e3 -> m a }
+
+Напишите «конструирующие» функции
+
+arr2 :: Monad m => (e1 -> e2 -> a) -> Arr2T e1 e2 m a
+arr3 :: Monad m => (e1 -> e2 -> e3 -> a) -> Arr3T e1 e2 e3 m a
+
+обеспечивающие следующее поведение
+
+GHCi> (getArr2T $ arr2 (+)) 33 9 :: [Integer]
+[42]
+GHCi> (getArr3T $ arr3 foldr) (*) 1 [1..5] :: Either String Integer
+Right 120
+GHCi> import Data.Functor.Identity
+GHCi> runIdentity $ (getArr2T $ arr2 (+)) 33 9
+42
+--}
+
+newtype Arr2T e1 e2 m a = Arr2T { getArr2T :: e1 -> e2 -> m a }
+newtype Arr3T e1 e2 e3 m a = Arr3T { getArr3T :: e1 -> e2 -> e3 -> m a }
+
+arr2 :: (Monad m)=> (e1 -> e2 -> a) -> Arr2T e1 e2 m a
+arr2 f = Arr2T $ \e1 e2 -> return (f e1 e2)
+
+arr3 :: (Monad m)=> (e1 -> e2 -> e3 -> a) -> Arr3T e1 e2 e3 m a
+arr3 f = Arr3T $ \e1 e2 e3 -> return (f e1 e2 e3)
+{--
+arr2 = Arr2T . ((return.).)
+arr3 = Arr3T . (((return.).).)
+
+arr2 = Arr2T . fmap (fmap return)
+arr3 = Arr3T . fmap (fmap (fmap return))
+
+arr2 = Arr2T . ((pure .) .)
+arr3 = Arr3T . (((pure .) .) .)
+--}
+
+-- end of solution
+
+test48 = (getArr2T $ arr2 (+)) 33 9 :: [Integer] -- [42]
+test49 = (getArr3T $ arr3 foldr) (*) 1 [1..5] :: Either String Integer -- Right 120
+-- import Data.Functor.Identity
+test50 = runIdentity $ (getArr2T $ arr2 (+)) 33 9 -- 42
+
+
+{--
+Сделайте трансформеры
+
+newtype Arr2T e1 e2 m a = Arr2T { getArr2T :: e1 -> e2 -> m a }
+newtype Arr3T e1 e2 e3 m a = Arr3T { getArr3T :: e1 -> e2 -> e3 -> m a }
+
+представителями класса типов `Functor` в предположении, что `m` является функтором:
+
+GHCi> a2l = Arr2T $ \e1 e2 -> [e1,e2,e1+e2]
+GHCi> (getArr2T $ succ <$> a2l) 10 100
+[11,101,111]
+GHCi> a3e = Arr3T $ \e1 e2 e3 -> Right (e1+e2+e3)
+GHCi> (getArr3T $ sqrt <$> a3e) 2 3 4
+Right 3.0
+--}
+-- newtype Arr2T e1 e2 m a = Arr2T { getArr2T :: e1 -> e2 -> m a }
+-- newtype Arr3T e1 e2 e3 m a = Arr3T { getArr3T :: e1 -> e2 -> e3 -> m a }
+instance (Functor m)=> Functor (Arr2T e1 e2 m) where
+    fmap :: (a -> b) -> Arr2T e1 e2 m a -> Arr2T e1 e2 m b
+    fmap f x = Arr2T env2mb where
+        env2mb = \e1 e2 -> fmap f (env2ma e1 e2)
+        env2ma = getArr2T x
+
+instance (Functor m)=> Functor (Arr3T e1 e2 e3 m) where
+    fmap :: (a -> b) -> Arr3T e1 e2 e3 m a -> Arr3T e1 e2 e3 m b
+    fmap f x = Arr3T env2mb where
+        env2mb = \e1 e2 e3 -> fmap f (env2ma e1 e2 e3)
+        env2ma = getArr3T x
+{--
+
+instance Functor m => Functor (Arr2T e1 e2 m) where fmap f = Arr2T.((fmap f.).).getArr2T
+instance Functor m => Functor (Arr3T e1 e2 e3 m) where fmap f = Arr3T.(((fmap f.).).).getArr3T
+
+fmap f ar2 = Arr2T $ (fmap . fmap) f . getArr2T ar2
+fmap f ar3 = Arr3T $ (fmap . fmap . fmap) f . getArr3T ar3
+
+fmap f (Arr2T a2mb) = Arr2T (\e1 e2 -> fmap f (a2mb e1 e2))
+fmap f (Arr3T a2mb) = Arr3T (\e1 e2 e3 -> fmap f (a2mb e1 e2 e3))
+
+--}
+-- end of solution
+
+a2l :: (Num a)=> Arr2T a a [] a
+a2l = Arr2T $ \e1 e2 -> [e1, e2, e1 + e2] -- не-тривиальный конструктор, внутренняя монада-список
+a3e ::(Num a)=> Arr3T a a a (Either b) a
+a3e = Arr3T $ \e1 e2 e3 -> Right (e1 + e2 + e3) -- не-тривиальный конструктор внутренней монады изер
+test51 = (getArr2T $ succ <$> a2l) 10 100 -- [11,101,111]
+test52 = (getArr3T $ sqrt <$> a3e) 2 3 4 -- Right 3.0
+
+
+{--
+Сделайте трансформеры
+
+newtype Arr2T e1 e2 m a = Arr2T { getArr2T :: e1 -> e2 -> m a }
+newtype Arr3T e1 e2 e3 m a = Arr3T { getArr3T :: e1 -> e2 -> e3 -> m a }
+
+представителями класса типов `Applicative` в предположении, что `m` является аппликативным функтором:
+
+GHCi> a2l = Arr2T $ \e1 e2 -> [e1,e2]
+GHCi> a2fl = Arr2T $ \e1 e2 -> [(e1*e2+),const 7]
+GHCi> getArr2T (a2fl <*> a2l) 2 10
+[22,30,7,7]
+GHCi> a3fl = Arr3T $ \e1 e2 e3 -> [(e2+),(e3+)]
+GHCi> a3l = Arr3T $ \e1 e2 e3 -> [e1,e2]
+GHCi> getArr3T (a3fl <*> a3l) 3 5 7
+[8,10,10,12]
+--}
+-- newtype Arr2T e1 e2 m a = Arr2T { getArr2T :: e1 -> e2 -> m a }
+-- newtype Arr3T e1 e2 e3 m a = Arr3T { getArr3T :: e1 -> e2 -> e3 -> m a }
+instance (Applicative m)=> Applicative (Arr2T e1 e2 m) where
+    pure :: a -> Arr2T e1 e2 m a
+    pure x = Arr2T (\e1 e2 -> pure x)
+
+    (<*>) :: Arr2T e1 e2 m (a -> b) -> Arr2T e1 e2 m a -> Arr2T e1 e2 m b
+    (Arr2T f) <*> (Arr2T v) = Arr2T env2mb where
+        env2mb = \e1 e2 -> (f e1 e2) <*> (v e1 e2)
+
+instance (Applicative m)=> Applicative (Arr3T e1 e2 e3 m) where
+    pure :: a -> Arr3T e1 e2 e3 m a
+    pure x = Arr3T (\e1 e2 e3 -> pure x)
+
+    (<*>) :: Arr3T e1 e2 e3 m (a -> b) -> Arr3T e1 e2 e3 m a -> Arr3T e1 e2 e3 m b
+    (Arr3T f) <*> (Arr3T v) = Arr3T env2mb where
+        env2mb = \e1 e2 e3 -> (f e1 e2 e3) <*> (v e1 e2 e3)
+
+{--
+instance Applicative m => Applicative (Arr2T e1 e2 m) where
+  pure = Arr2T . pure . pure . pure
+  (Arr2T f) <*> (Arr2T x) = Arr2T $ \a b -> f a b <*> x a b
+instance Applicative m => Applicative (Arr3T e1 e2 e3 m) where
+  pure = Arr3T . pure . pure . pure . pure
+  (Arr3T f) <*> (Arr3T x) = Arr3T $ \a b c -> f a b c <*> x a b c
+
+instance Applicative m => Applicative (Arr2T e1 e2 m) where
+  pure = Arr2T . const . const . pure
+  f <*> x = Arr2T $ (liftA2 . liftA2) (<*>) (getArr2T f) (getArr2T x)
+instance Applicative m => Applicative (Arr3T e1 e2 e3 m) where
+  pure = Arr3T . const . const . const . pure
+  f <*> x = Arr3T $ (liftA2 . liftA2 . liftA2) (<*>) (getArr3T f) (getArr3T x)
+
+--}
+
+-- end of solution
+
+a3fl = Arr3T $ \e1 e2 e3 -> [(e2 +), (e3 +)]
+a3l = Arr3T $ \e1 e2 e3 -> [e1, e2]
+a2l2 = Arr2T $ \e1 e2 -> [e1, e2]
+a2fl = Arr2T $ \e1 e2 -> [(e1 * e2 +), const 7]
+test54 = getArr2T (a2fl <*> a2l2) 2 10 -- [22,30,7,7]
+test53 = getArr3T (a3fl <*> a3l) 3 5 7 -- [8,10,10,12]
+
+
+{--
+Сделайте трансформеры
+
+newtype Arr2T e1 e2 m a = Arr2T { getArr2T :: e1 -> e2 -> m a }
+newtype Arr3T e1 e2 e3 m a = Arr3T { getArr3T :: e1 -> e2 -> e3 -> m a }
+
+представителями класса типов `Monad` в предположении, что `m` является монадой:
+
+GHCi> a2l = Arr2T $ \e1 e2 -> [e1,e2]
+GHCi> getArr2T (do {x <- a2l; y <- a2l; return (x + y)}) 3 5
+[6,8,8,10]
+GHCi> a3m = Arr3T $ \e1 e2 e3 -> Just (e1 + e2 + e3)
+GHCi> getArr3T (do {x <- a3m; y <- a3m; return (x * y)}) 2 3 4
+Just 81
+--}
+-- newtype Arr2T e1 e2 m a = Arr2T { getArr2T :: e1 -> e2 -> m a }
+-- newtype Arr3T e1 e2 e3 m a = Arr3T { getArr3T :: e1 -> e2 -> e3 -> m a }
+instance (Monad m)=> Monad (Arr2T e1 e2 m) where
+    (>>=) :: Arr2T e1 e2 m a -> (a -> Arr2T e1 e2 m b) -> Arr2T e1 e2 m b
+    (Arr2T m) >>= k = Arr2T env2mb where
+        env2mb = \e1 e2 -> do
+            v <- m e1 e2
+            getArr2T (k v) e1 e2
+{--
+instance (Monad m)=> Monad (Arr3T e1 e2 e3 m) where
+    (>>=) :: Arr3T e1 e2 e3 m a -> (a -> Arr3T e1 e2 e3 m b) -> Arr3T e1 e2 e3 m b
+    (Arr3T m) >>= k = Arr3T env2mb where
+        env2mb = \e1 e2 e3 -> do
+            v <- m e1 e2 e3
+            getArr3T (k v) e1 e2 e3
+
+instance (Functor m, Monad m) => Functor (Arr3T e1 e2 e3 m) where fmap = liftM
+instance (Applicative m, Monad m) => Applicative (Arr3T e1 e2 e3 m) where pure = return ; (<*>) =  ap
+
+instance Monad m => Monad (Arr2T e1 e2 m) where
+  return = pure
+  (Arr2T x) >>= f = Arr2T $ \a b-> x a b >>= \y -> getArr2T (f y) a b
+instance Monad m => Monad (Arr3T e1 e2 e3 m) where
+  return = pure
+  (Arr3T x) >>= f = Arr3T $ \a b c-> x a b c >>= \y -> getArr3T (f y) a b c
+
+
+--}
+
+-- end of solution
+
+a2l3 = Arr2T $ \e1 e2 -> [e1,e2]
+a3m = Arr3T $ \e1 e2 e3 -> Just (e1 + e2 + e3)
+test56 = getArr2T (do {x <- a2l3; y <- a2l3; return (x + y)}) 3 5 -- [6,8,8,10]
+test55 = getArr3T (do {x <- a3m; y <- a3m; return (x * y)}) 2 3 4 -- Just 81
+
+
+{--
+Разработанная нами реализация интерфейса монады для трансформера `Arr3T` (как и для `Arr2T` и `ReaderT`)
+имеет не очень хорошую особенность.
+При неудачном сопоставлении с образцом вычисления в этой монаде завершаются аварийно,
+с выводом сообщения об ошибке в диагностический поток:
+
+GHCi> a3m = Arr3T $ \e1 e2 e3 -> Just (e1 + e2 + e3)
+GHCi> getArr3T (do {9 <- a3m; y <- a3m; return y}) 2 3 4
+Just 9
+GHCi> getArr3T (do {10 <- a3m; y <- a3m; return y}) 2 3 4
+*** Exception: Pattern match failure in do expression at :12:15-16
+
+Для обычного ридера такое поведение нормально,
+однако у трансформера внутренняя монада может уметь обрабатывать ошибки более щадащим образом.
+
+Переопределите функцию `fail` класса типов `Monad` для `Arr3T` так,
+чтобы обработка неудачного сопоставления с образцом осуществлялась бы во внутренней монаде:
+
+GHCi> getArr3T (do {10 <- a3m; y <- a3m; return y}) 2 3 4
+Nothing
+--}
+-- newtype Arr3T e1 e2 e3 m a = Arr3T { getArr3T :: e1 -> e2 -> e3 -> m a }
+
+instance (Monad m)=> Monad (Arr3T e1 e2 e3 m) where
+    -- fail s = Arr3T $ \e1 e2 e3 -> do { fail s }
+    (>>=) :: Arr3T e1 e2 e3 m a -> (a -> Arr3T e1 e2 e3 m b) -> Arr3T e1 e2 e3 m b
+    (Arr3T m) >>= k = Arr3T env2mb where
+        env2mb = \e1 e2 e3 -> do
+            v <- m e1 e2 e3
+            getArr3T (k v) e1 e2 e3
+
+instance (TE.MonadFail m)=> TE.MonadFail (Arr3T e1 e2 e3 m) where
+    fail :: String -> Arr3T e1 e2 e3 m a
+    fail s = Arr3T $ \_ _ _ -> fail s
+{--
+instance Monad m => Monad (Arr3T e1 e2 e3 m) where
+  return = pure
+  (Arr3T x) >>= f = Arr3T $ \a b c-> x a b c >>= \y -> getArr3T (f y) a b c
+  fail = Arr3T. const . const . const . fail
+
+
+instance (Monad m) => Monad (Arr3T e1 e2 e3 m) where
+  fail s  = Arr3T $ \e1 e2 e3 -> fail s
+  x >>= f = Arr3T $ \e1 e2 e3 -> do
+      xv <- getArr3T x e1 e2 e3
+      getArr3T (f xv) e1 e2 e3
+
+--}
+
+-- end of solution
+
+a3m2 :: (Num a)=> Arr3T a a a Maybe a
+a3m2 = Arr3T $ \e1 e2 e3 -> Just (e1 + e2 + e3)
+test59 = getArr3T (do {9 <- a3m2; y <- a3m2; return y}) 2 3 4 -- Just 9
+test58 = getArr3T (do {10 <- a3m2; y <- a3m2; return y}) 2 3 4 -- *** Exception: Pattern match failure in do expression at :12:15-16
+test57 = getArr3T (do {10 <- a3m2; y <- a3m2; return y}) 2 3 4 -- Nothing
+
+
+{--
+Сделайте трансформер
+newtype Arr2T e1 e2 m a = Arr2T { getArr2T :: e1 -> e2 -> m a }
+
+представителями класса типов `MonadTrans`: -- lift
+
+GHCi> a2l = Arr2T $ \e1 e2 -> [e1,e2]
+GHCi> getArr2T (do {x <- a2l; y <- lift [10,20,30]; return (x+y)}) 3 4
+[13,23,33,14,24,34]
+
+Реализуйте также «стандартный интерфейс» для этой монады — функцию
+asks2 :: (Monad m)=> (e1 -> e2 -> a) -> Arr2T e1 e2 m a
+
+работающую как `asks` для `ReaderT`, но принимающую при этом функцию от обоих наличных окружений:
+
+GHCi> getArr2T (do {x <- asks2 const; y <- asks2 (flip const); z <- asks2 (,); return (x,y,z)}) 'A' 'B'
+('A','B',('A','B'))
+--}
+
+-- class MonadTrans t where
+--   lift :: Monad m => m a -> t m a
+-- newtype Arr2T e1 e2 m a = Arr2T { getArr2T :: e1 -> e2 -> m a }
+
+instance MonadTrans (Arr2T e1 e2) where
+    lift :: (Monad m)=> m a -> Arr2T e1 e2 m a
+    lift m = Arr2T env2ma where
+        env2ma = \_ _ -> m
+
+asks2 :: (Monad m)=> (e1 -> e2 -> a) -> Arr2T e1 e2 m a
+asks2 f = Arr2T env2ma where
+    env2ma = \e1 e2 -> return (f e1 e2)
+
+{--
+instance MonadTrans (Arr2T e1 e2) where lift = Arr2T. const . const
+asks2 = Arr2T . ((return .).)
+
+instance MonadTrans (ReaderT r) where
+    lift :: (Monad m) => m a -> ReaderT r m a
+    lift m = ReaderT (\_ -> m) -- ридер это стрелочный тип, поэтому лямбда
+
+ask :: (Monad m)=> ReaderT r m r -- для трансформера стало так
+ask = ReaderT return
+
+asks :: (Monad m) => (r -> a) -> ReaderT r m a -- для трансформера стало так
+asks f = ReaderT (return . f) -- внутренняя монада требует наличия `return`
+--}
+
+-- end of solution
+
+a2l4 = Arr2T $ \e1 e2 -> [e1, e2]
+test61 = getArr2T (do {x <- a2l4; y <- lift [10,20,30]; return (x+y)}) 3 4 -- [13,23,33,14,24,34]
+-- test60 :: (Char,Char, (Char,Char))
+-- test60 = getArr2T (do {x <- asks2 const; y <- asks2 (flip const); z <- asks2 (,); return (x,y,z)}) 'A' 'B' -- ('A','B',('A','B'))

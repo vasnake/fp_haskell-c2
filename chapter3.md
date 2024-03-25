@@ -2448,7 +2448,7 @@ https://stepik.org/lesson/38577/step/1?unit=17396
 
 Как трансформеры создавать, самостоятельно.
 
-Монаду `Reader` перепишем как трансформер (обвязку вокруг внутренней абстрактной монады) `ReaderT`.
+Монаду `Reader` перепишем как трансформер `ReaderT`, сделаем обвязку вокруг внутренней абстрактной монады.
 Рядом с реализацией `Reader` будем писать `ReaderT` и смотреть на разницу.
 ```hs
 {-# LANGUAGE InstanceSigs #-} -- позволяет писать сигнатуры для инстансов
@@ -2456,10 +2456,10 @@ https://stepik.org/lesson/38577/step/1?unit=17396
 newtype Reader r a = Reader { runReader :: r -> a } -- было
 newtype ReaderT r m a = ReaderT { runReaderT :: r -> m a } -- стало, m это еще один параметр, внутренняя монада
 
--- Ридер это функциональная стрелка, со связанным первым параметром.
+-- Ридер это функциональная стрелка, со свободным последним параметром.
 -- Абстракция "чтения из окружения".
 
-reader :: (Monad m) => (r -> a) -> ReaderT r m a -- конструктор
+reader :: (Monad m)=> (r -> a) -> ReaderT r m a -- конструктор
 -- Нам нужен кастомный конструктор, чтобы иметь возможность упаковать стрелку `r -> a` в композитную монаду.
 -- Если этого не сделать, конструктор `ReaderT` будет требовать стрелку в монаду `r -> m a`,
 -- это не то, что мы хотим
@@ -2467,11 +2467,11 @@ reader :: (Monad m) => (r -> a) -> ReaderT r m a -- конструктор
 runReader (Reader (*3)) 7 -- стрелка пакуется в монаду ридер, ок
 runReaderT (ReaderT (func)) 7 where func = \x -> [x*3] -- для трансформера было бы так, внутренняя монада: список
 
-reader :: (Monad m) => (r -> a) -> ReaderT r m a -- реализация
+reader :: (Monad m)=> (r -> a) -> ReaderT r m a -- реализация
 reader f = ReaderT (return . f) -- return after f, ретурн это стандартный способ заворачивания в монаду
 
-:t runReaderT (reader (*3)) 7 -- выражение полиморфно по внутренней монаде, надо указать компайлеру, какая монада нам нужна
-    :: (Monad m, Num a) => m a
+:t runReaderT (reader (*3)) 7 -- выражение полиморфно по внутренней монаде,
+    :: (Monad m, Num a) => m a -- для запуска надо указать компайлеру, какая монада нам нужна
 
 ghci> runReaderT (reader (*3)) 7 :: [Int] -- внутренняя монада: список
 [21]
@@ -2481,12 +2481,12 @@ runReaderT (reader (*3)) 7 :: IO Int
 ```
 repl
 
+### 3.4.3 test
+
 ```hs
-https://stepik.org/lesson/38577/step/3?unit=17396
-TODO
 {--
 В задачах из предыдущих модулей мы сталкивались с типами данных
-задающих вычисления с двумя и тремя окружениями соответственно.
+задающих вычисления с двумя и тремя окружениями соответственно
 
 newtype Arr2 e1 e2 a = Arr2 { getArr2 :: e1 -> e2 -> a }
 newtype Arr3 e1 e2 e3 a = Arr3 { getArr3 :: e1 -> e2 -> e3 -> a }
@@ -2519,19 +2519,36 @@ arr3 = undefined
 
 -- solution
 
+arr2 :: (Monad m)=> (e1 -> e2 -> a) -> Arr2T e1 e2 m a
+arr2 f = Arr2T $ \e1 e2 -> return (f e1 e2)
+arr3 :: (Monad m)=> (e1 -> e2 -> e3 -> a) -> Arr3T e1 e2 e3 m a
+arr3 f = Arr3T $ \e1 e2 e3 -> return (f e1 e2 e3)
+
+-- alternatives
+
+arr2 = Arr2T . ((return.).)
+arr3 = Arr3T . (((return.).).)
+
+arr2 = Arr2T . fmap (fmap return)
+arr3 = Arr3T . fmap (fmap (fmap return))
+
+arr2 = Arr2T . ((pure .) .)
+arr3 = Arr3T . (((pure .) .) .)
+
 ```
 test
 
 ### 3.4.4 Functor Reader
 
-Начнем писать реализацию: Функтор, Аппликативный функтор, монада.
+Начнем писать реализацию: Функтор, Аппликативный функтор, Монада.
+
 Могли бы сразу сделать монаду, получив функтор и аппликатив "бесплатно".
 Но в учебных целях пройдем всю цепочку снизу-вверх.
 ```hs
 newtype Reader r a = Reader { runReader :: r -> a } -- было
 newtype ReaderT r m a = ReaderT { runReaderT :: r -> m a } -- стало, m это еще один параметр, внутренняя монада
 
-reader :: (Monad m) => (r -> a) -> ReaderT r m a -- конструктор трансформера
+reader :: (Monad m)=> (r -> a) -> ReaderT r m a -- конструктор трансформера
 reader f = ReaderT (return . f) -- return after f, ретурн это стандартный способ заворачивания в монаду
 
 -- вспомним основу ридера:
@@ -2584,9 +2601,9 @@ runReaderT (fmap succ rl3) 7 -- [43, 8 15] -- [42+1, 7+1,  (7*2)+1]
 ```
 repl
 
+### 3.4.6 test
+
 ```hs
-https://stepik.org/lesson/38577/step/6?unit=17396
-TODO
 {--
 Сделайте трансформеры
 
@@ -2606,6 +2623,30 @@ newtype Arr2T e1 e2 m a = Arr2T { getArr2T :: e1 -> e2 -> m a }
 newtype Arr3T e1 e2 e3 m a = Arr3T { getArr3T :: e1 -> e2 -> e3 -> m a }
 
 -- solution
+
+newtype Arr2T e1 e2 m a = Arr2T { getArr2T :: e1 -> e2 -> m a }
+newtype Arr3T e1 e2 e3 m a = Arr3T { getArr3T :: e1 -> e2 -> e3 -> m a }
+instance (Functor m)=> Functor (Arr2T e1 e2 m) where
+    -- fmap :: (a -> b) -> Arr2T e1 e2 m a -> Arr2T e1 e2 m b
+    fmap f x = Arr2T env2mb where
+        env2mb = \e1 e2 -> fmap f (env2ma e1 e2)
+        env2ma = getArr2T x
+instance (Functor m)=> Functor (Arr3T e1 e2 e3 m) where
+    -- fmap :: (a -> b) -> Arr3T e1 e2 e3 m a -> Arr3T e1 e2 e3 m b
+    fmap f x = Arr3T env2mb where
+        env2mb = \e1 e2 e3 -> fmap f (env2ma e1 e2 e3)
+        env2ma = getArr3T x
+
+-- alternatives
+
+instance Functor m => Functor (Arr2T e1 e2 m) where fmap f = Arr2T.((fmap f.).).getArr2T
+instance Functor m => Functor (Arr3T e1 e2 e3 m) where fmap f = Arr3T.(((fmap f.).).).getArr3T
+
+fmap f ar2 = Arr2T $ (fmap . fmap) f . getArr2T ar2
+fmap f ar3 = Arr3T $ (fmap . fmap . fmap) f . getArr3T ar3
+
+fmap f (Arr2T a2mb) = Arr2T (\e1 e2 -> fmap f (a2mb e1 e2))
+fmap f (Arr3T a2mb) = Arr3T (\e1 e2 e3 -> fmap f (a2mb e1 e2 e3))
 
 ```
 test
@@ -2646,7 +2687,7 @@ repl
 Реализуем аппликатив для `ReaderT`
 ```hs
 -- сделать аппликатив трансформера можно только если внутренняя монада тоже аппликатив
-instance (Applicative m) => Applicative (ReaderT r m) where
+instance (Applicative m)=> Applicative (ReaderT r m) where
     pure :: a -> ReaderT r m a
     pure = ReaderT . const . pure -- дополнительно запакуем в аппликатив внутренней монады, pure
     (<*>) :: ReaderT r m (a -> b) -> ReaderT r m a -> ReaderT r m b
@@ -2742,9 +2783,9 @@ instance (Applicative m) => Applicative (ReaderT r m) where -- оригинал�
 ```
 repl
 
+### 3.4.10 test
+
 ```hs
-https://stepik.org/lesson/38577/step/10?unit=17396
-TODO
 {--
 Сделайте трансформеры
 
@@ -2766,8 +2807,37 @@ newtype Arr2T e1 e2 m a = Arr2T { getArr2T :: e1 -> e2 -> m a }
 newtype Arr3T e1 e2 e3 m a = Arr3T { getArr3T :: e1 -> e2 -> e3 -> m a }
 
 -- solution
--- у проверяющей программе не включено InstanceSigs
--- Тут все равно нужно вписывать свою реализацию функтора
+
+newtype Arr2T e1 e2 m a = Arr2T { getArr2T :: e1 -> e2 -> m a }
+newtype Arr3T e1 e2 e3 m a = Arr3T { getArr3T :: e1 -> e2 -> e3 -> m a }
+instance Functor m => Functor (Arr2T e1 e2 m) where fmap f = Arr2T.((fmap f.).).getArr2T
+instance Functor m => Functor (Arr3T e1 e2 e3 m) where fmap f = Arr3T.(((fmap f.).).).getArr3T
+
+instance (Applicative m)=> Applicative (Arr2T e1 e2 m) where
+    pure x = Arr2T (\e1 e2 -> pure x)
+    (Arr2T f) <*> (Arr2T v) = Arr2T env2mb where
+        env2mb = \e1 e2 -> (f e1 e2) <*> (v e1 e2)
+
+instance (Applicative m)=> Applicative (Arr3T e1 e2 e3 m) where
+    pure x = Arr3T (\e1 e2 e3 -> pure x)
+    (Arr3T f) <*> (Arr3T v) = Arr3T env2mb where
+        env2mb = \e1 e2 e3 -> (f e1 e2 e3) <*> (v e1 e2 e3)
+
+-- alternatives
+
+instance Applicative m => Applicative (Arr2T e1 e2 m) where
+  pure = Arr2T . pure . pure . pure
+  (Arr2T f) <*> (Arr2T x) = Arr2T $ \a b -> f a b <*> x a b
+instance Applicative m => Applicative (Arr3T e1 e2 e3 m) where
+  pure = Arr3T . pure . pure . pure . pure
+  (Arr3T f) <*> (Arr3T x) = Arr3T $ \a b c -> f a b c <*> x a b c
+
+instance Applicative m => Applicative (Arr2T e1 e2 m) where
+  pure = Arr2T . const . const . pure
+  f <*> x = Arr2T $ (liftA2 . liftA2) (<*>) (getArr2T f) (getArr2T x)
+instance Applicative m => Applicative (Arr3T e1 e2 e3 m) where
+  pure = Arr3T . const . const . const . pure
+  f <*> x = Arr3T $ (liftA2 . liftA2 . liftA2) (<*>) (getArr3T f) (getArr3T x)
 
 ```
 test
@@ -2788,7 +2858,7 @@ instance Monad (Reader r) where
     -- env :: r; v :: a; k v :: Reader r b
 
 -- поехали:
-instance (Monad m) => Monad (ReaderT r m) where
+instance (Monad m)=> Monad (ReaderT r m) where
     (>>=) :: ReaderT r m a -> (a -> ReaderT r m b) -> ReaderT r m b -- m >>= k
     m >>= k = ReaderT rmb where rmb = \env -> do -- do: подняли вычисления во внутреннюю монаду, код 1-в-1 с `Reader`
         v <- runReaderT m env
@@ -2802,9 +2872,9 @@ runReaderT (do { x <- rl3; return (succ x) }) 7 -- env = 7
 ```
 repl
 
+### 3.4.12 test
+
 ```hs
-https://stepik.org/lesson/38577/step/12?unit=17396
-TODO
 {--
 Сделайте трансформеры
 
@@ -2824,23 +2894,50 @@ newtype Arr2T e1 e2 m a = Arr2T { getArr2T :: e1 -> e2 -> m a }
 newtype Arr3T e1 e2 e3 m a = Arr3T { getArr3T :: e1 -> e2 -> e3 -> m a }
 
 -- solution
-newtype Arr3T e1 e2 e3 m a = Arr3T { getArr3T :: e1 -> e2 -> e3 -> m a }
-instance (Functor m, Monad m) => Functor (Arr3T e1 e2 e3 m) where
-    fmap = liftM
-instance (Applicative m, Monad m) => Applicative (Arr3T e1 e2 e3 m) where
-    pure = return
-    (<*>) =  ap
 
+import Control.Applicative
+newtype Arr2T e1 e2 m a = Arr2T { getArr2T :: e1 -> e2 -> m a }
+newtype Arr3T e1 e2 e3 m a = Arr3T { getArr3T :: e1 -> e2 -> e3 -> m a }
+
+instance (Monad m)=> Monad (Arr2T e1 e2 m) where
+    (Arr2T m) >>= k = Arr2T env2mb where
+        env2mb = \e1 e2 -> do
+            v <- m e1 e2
+            getArr2T (k v) e1 e2
+
+instance (Monad m)=> Monad (Arr3T e1 e2 e3 m) where
+    (Arr3T m) >>= k = Arr3T env2mb where
+        env2mb = \e1 e2 e3 -> do
+            v <- m e1 e2 e3
+            getArr3T (k v) e1 e2 e3
+
+instance Applicative m => Applicative (Arr2T e1 e2 m) where
+  pure = Arr2T . const . const . pure
+  f <*> x = Arr2T $ (liftA2 . liftA2) (<*>) (getArr2T f) (getArr2T x)
+instance Applicative m => Applicative (Arr3T e1 e2 e3 m) where
+  pure = Arr3T . const . const . const . pure
+  f <*> x = Arr3T $ (liftA2 . liftA2 . liftA2) (<*>) (getArr3T f) (getArr3T x)
+instance Functor m => Functor (Arr2T e1 e2 m) where fmap f = Arr2T.((fmap f.).).getArr2T
+instance Functor m => Functor (Arr3T e1 e2 e3 m) where fmap f = Arr3T.(((fmap f.).).).getArr3T
+
+-- alternatives
+
+instance Monad m => Monad (Arr2T e1 e2 m) where
+  return = pure
+  (Arr2T x) >>= f = Arr2T $ \a b-> x a b >>= \y -> getArr2T (f y) a b
+instance Monad m => Monad (Arr3T e1 e2 e3 m) where
+  return = pure
+  (Arr3T x) >>= f = Arr3T $ \a b c-> x a b c >>= \y -> getArr3T (f y) a b c
 ```
 test
 
+### 3.4.13 test
+
 ```hs
-https://stepik.org/lesson/38577/step/13?unit=17396
-TODO
 {--
 Разработанная нами реализация интерфейса монады для трансформера `Arr3T` (как и для `Arr2T` и `ReaderT`)
-имеет не очень хорошую особенность. 
-При неудачном сопоставлении с образцом вычисления в этой монаде завершаются аварийно, 
+имеет не очень хорошую особенность.
+При неудачном сопоставлении с образцом вычисления в этой монаде завершаются аварийно,
 с выводом сообщения об ошибке в диагностический поток:
 
 GHCi> a3m = Arr3T $ \e1 e2 e3 -> Just (e1 + e2 + e3)
@@ -2849,9 +2946,9 @@ Just 9
 GHCi> getArr3T (do {10 <- a3m; y <- a3m; return y}) 2 3 4
 *** Exception: Pattern match failure in do expression at :12:15-16
 
-Для обычного ридера такое поведение нормально, 
-однако у трансформера внутренняя монада может уметь обрабатывать ошибки более щадащим образом. 
-Переопределите функцию `fail` класса типов `Monad` для `Arr3T` так, 
+Для обычного ридера такое поведение нормально,
+однако у трансформера внутренняя монада может уметь обрабатывать ошибки более щадащим образом.
+Переопределите функцию `fail` класса типов `Monad` для `Arr3T` так,
 чтобы обработка неудачного сопоставления с образцом осуществлялась бы во внутренней монаде:
 
 GHCi> getArr3T (do {10 <- a3m; y <- a3m; return y}) 2 3 4
@@ -2860,6 +2957,33 @@ Nothing
 newtype Arr3T e1 e2 e3 m a = Arr3T { getArr3T :: e1 -> e2 -> e3 -> m a }
 
 -- solution
+
+import Control.Applicative
+newtype Arr3T e1 e2 e3 m a = Arr3T { getArr3T :: e1 -> e2 -> e3 -> m a }
+instance (Monad m)=> Monad (Arr3T e1 e2 e3 m) where
+    fail s = Arr3T $ \e1 e2 e3 -> do { fail s }
+    (Arr3T m) >>= k = Arr3T env2mb where
+        env2mb = \e1 e2 e3 -> do
+            v <- m e1 e2 e3
+            getArr3T (k v) e1 e2 e3
+instance Applicative m => Applicative (Arr3T e1 e2 e3 m) where
+  pure = Arr3T . const . const . const . pure
+  f <*> x = Arr3T $ (liftA2 . liftA2 . liftA2) (<*>) (getArr3T f) (getArr3T x)
+instance Functor m => Functor (Arr3T e1 e2 e3 m) where fmap f = Arr3T.(((fmap f.).).).getArr3T
+
+-- alternative
+
+instance Monad m => Monad (Arr3T e1 e2 e3 m) where
+  return = pure
+  (Arr3T x) >>= f = Arr3T $ \a b c-> x a b c >>= \y -> getArr3T (f y) a b c
+  fail = Arr3T. const . const . const . fail
+
+
+instance (Monad m) => Monad (Arr3T e1 e2 e3 m) where
+  fail s  = Arr3T $ \e1 e2 e3 -> fail s
+  x >>= f = Arr3T $ \e1 e2 e3 -> do
+      xv <- getArr3T x e1 e2 e3
+      getArr3T (f xv) e1 e2 e3
 
 ```
 test
@@ -2909,7 +3033,7 @@ rl3 = ReaderT (\env -> [42, env, env*2]) -- :: ReaderT a [] a -- ReaderListThree
 ```
 repl
 
-### 3.4.15 ask, asks, local
+### 3.4.15 ReaderT ask, asks, local
 
 Стандартный интерфейс монады.
 Для ридера это `ask, asks, local, ...`
@@ -2917,7 +3041,7 @@ repl
 ask :: Reader r r -- для монады ридера было так
 ask = Reader id
 
-ask :: (Monad m) => ReaderT r m r -- для трансформера стало так
+ask :: (Monad m)=> ReaderT r m r -- для трансформера стало так
 ask = ReaderT return
 
 runReaderT (do {
@@ -2958,23 +3082,21 @@ runReaderT (do {
 ```
 repl
 
+### 3.4.16 test
+
 ```hs
-https://stepik.org/lesson/38577/step/16?unit=17396
-TODO
 {--
 Сделайте трансформер
-
 newtype Arr2T e1 e2 m a = Arr2T { getArr2T :: e1 -> e2 -> m a }
 
-представителями класса типов `MonadTrans`:
+представителями класса типов `MonadTrans`: -- lift
 
 GHCi> a2l = Arr2T $ \e1 e2 -> [e1,e2]
 GHCi> getArr2T (do {x <- a2l; y <- lift [10,20,30]; return (x+y)}) 3 4
 [13,23,33,14,24,34]
 
 Реализуйте также «стандартный интерфейс» для этой монады — функцию
-
-asks2 :: Monad m => (e1 -> e2 -> a) -> Arr2T e1 e2 m a
+asks2 :: (Monad m)=> (e1 -> e2 -> a) -> Arr2T e1 e2 m a
 
 работающую как `asks` для `ReaderT`, но принимающую при этом функцию от обоих наличных окружений:
 
@@ -2988,9 +3110,40 @@ newtype Arr2T e1 e2 m a = Arr2T { getArr2T :: e1 -> e2 -> m a }
 
 -- solution
 
+class MonadTrans t where
+  lift :: Monad m => m a -> t m a
+
+newtype Arr2T e1 e2 m a = Arr2T { getArr2T :: e1 -> e2 -> m a }
+
+instance MonadTrans (Arr2T e1 e2) where
+    -- lift :: (Monad m)=> m a -> Arr2T e1 e2 m a
+    lift m = Arr2T env2ma where
+        env2ma = \_ _ -> m
+
+asks2 :: (Monad m)=> (e1 -> e2 -> a) -> Arr2T e1 e2 m a
+asks2 f = Arr2T env2ma where
+    env2ma = \e1 e2 -> return (f e1 e2)
+
+instance (Monad m)=> Monad (Arr2T e1 e2 m) where
+    (Arr2T m) >>= k = Arr2T env2mb where
+        env2mb = \e1 e2 -> do
+            v <- m e1 e2
+            getArr2T (k v) e1 e2
+
+instance (Applicative m)=> Applicative (Arr2T e1 e2 m) where
+    pure x = Arr2T (\e1 e2 -> pure x)
+    (Arr2T f) <*> (Arr2T v) = Arr2T env2mb where
+        env2mb = \e1 e2 -> (f e1 e2) <*> (v e1 e2)
+
+instance (Functor m)=> Functor (Arr2T e1 e2 m) where
+    fmap f x = Arr2T env2mb where
+        env2mb = \e1 e2 -> fmap f (env2ma e1 e2)
+        env2ma = getArr2T x
+
+-- alternatives
+
+instance MonadTrans (Arr2T e1 e2) where lift = Arr2T . const . const
+asks2 = Arr2T . ((return . ) . )
+
 ```
 test
-
-
-
-grep `TODO` markers, fix it.
