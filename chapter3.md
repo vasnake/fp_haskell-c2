@@ -2296,30 +2296,28 @@ test
 ### 3.3.12 test
 
 ```hs
-https://stepik.org/lesson/31556/step/12?unit=11810
-TODO
 {--
-Модифицируйте монаду `EsSi` из предыдущей задачи, 
-обернув ее в трансформер `ReaderT` с окружением, 
-представляющим собой пару целых чисел, задающих нижнюю и верхнюю границы для вычислений. 
-Функции `go` теперь не надо будет передавать эти параметры, они будут браться из окружения. 
-Сделайте получившуюся составную монаду трансформером:
+Модифицируйте монаду
+`EsSi` из предыдущей задачи, обернув ее в трансформер
+`ReaderT` с окружением, представляющим собой пару целых чисел,
+задающих нижнюю и верхнюю границы для вычислений.
 
+Функции
+`go` теперь не надо будет передавать эти параметры, они будут браться из окружения.
+
+Сделайте получившуюся составную монаду трансформером:
 type RiiEsSiT m = ReaderT (Integer,Integer) (ExceptT String (StateT Integer m))
 
 Реализуйте также функцию для запуска этого трансформера
-
 runRiiEsSiT :: ReaderT (Integer,Integer) (ExceptT String (StateT Integer m)) a 
                 -> (Integer,Integer)  
                 -> Integer 
                 -> m (Either String a, Integer)
 
 и модифицируйте код функции `go`, изменив её тип на
-
 go :: Monad m => StateT Integer m Integer -> RiiEsSiT m ()
 
 так, чтобы для шага вычисления последовательности с отладочным выводом текущего элемента последовательности на экран
-
 tickCollatz' :: StateT Integer IO Integer
 tickCollatz' = do
   n <- get
@@ -2329,7 +2327,6 @@ tickCollatz' = do
   return n
 
 мы получили бы
-
 GHCi> runRiiEsSiT (forever $ go tickCollatz') (1,200) 27
 82
 41
@@ -2362,6 +2359,68 @@ go = undefined
 
 -- solution
 
+import Control.Monad
+import Control.Monad.Trans
+import Control.Monad.Trans.Reader
+import Control.Monad.Trans.State
+import Control.Monad.Trans.Except
+import qualified Control.Monad.Trans.Except as TE
+import qualified Control.Monad.Trans.Reader as TR
+
+type RiiEsSiT m = TR.ReaderT (Integer, Integer) (TE.ExceptT String (StateT Integer m))
+
+runRiiEsSiT :: RiiEsSiT m a
+                 -> (Integer, Integer)  -- lo, hi
+                 -> Integer             -- ini
+                 -> m (Either String a, Integer) -- пара: (изер err|v, state)
+runRiiEsSiT = \pair -> runStateT . TE.runExceptT . (TR.runReaderT pair)
+
+go :: (Monad m)=> StateT Integer m Integer -> RiiEsSiT m ()
+go next = do
+    _ <- lift $ lift next -- запуск вычисления
+    n <- lift $ lift get -- следующий колац из стейта
+    (lower, upper) <- TR.ask
+    when (n <= lower) (lift $ TE.throwE "Lower bound")
+    when (n >= upper) (lift $ TE.throwE "Upper bound")
+
+-- alternatives
+
+runRiiEsSiT riiessi bounds start = runStateT (runExceptT (runReaderT riiessi bounds)) start
+go next = let
+        except_ = lift
+        state_ = lift . lift
+    in do
+        state_ next
+        (down, up) <- ask
+        n <- state_ get
+        except_ $ when (n >= up)   $ throwE "Upper bound"
+        except_ $ when (n <= down) $ throwE "Lower bound"
+
+runRiiEsSiT m e1 = runStateT (runExceptT (runReaderT m e1)) 
+go step = do
+  (lowerBound, upperBound) <- ask
+  x <- lift (lift (step >> get))
+  lift $ when (x >= upperBound) (throwE "Upper bound")
+  lift $ when (x <= lowerBound) (throwE "Lower bound")
+
+runRiiEsSiT =  (runStateT .) . (runExceptT .). runReaderT
+go action = do
+  (low, high) <- MTL.ask
+  void $ lift $ lift action
+  current <- MTL.get
+  when (current <= low)  $ MTL.throwError "Lower bound"
+  when (current >= high) $ MTL.throwError "Upper bound"
+
+runRiiEsSiT m bounds n = runStateT (runExceptT (runReaderT m bounds)) n
+go m = do
+    (min, max) <- ask
+    (lift . lift) m
+    x <- (lift . lift) $ get
+    when (x > max) (throwError "Upper bound")
+    when (x <= min) (throwError "Lower bound")
+    (lift . lift) $ put x
+    return ()
+
 ```
 test
 
@@ -2382,8 +2441,8 @@ https://stepik.org/lesson/38577/step/1?unit=17396
 Ранее рассмотрели внешнюю сторону трансформеров (монад), их применение.
 Теперь рассмотрим реализацию трансформеров.
 
-Спойлер: ничего сложного, композиция: внутренняя монада заворачивается во внешнюю,
-внешняя (зная все про себя и внешний интерфейс внутренней) реализует монадический интерфейс для композиции в целом.
+Спойлер: ничего сложного, простая композиция: внутренняя монада заворачивается во внешнюю,
+внешняя (зная всё про себя и внешний интерфейс внутренней) реализует монадический интерфейс для композиции в целом.
 
 ### 3.4.2 ReaderT, конструктор reader
 

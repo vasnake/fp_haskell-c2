@@ -85,6 +85,7 @@ import Prelude (
     )
 
 import Debug.Trace ( trace, )
+import qualified Control.Monad.Reader as TE
 debug = flip trace
 
 newtype Except e a = Except { runExcept :: Either e a } deriving Show
@@ -1432,3 +1433,141 @@ test43 = runEsSi (go 1 85 tickCollatz) 27 -- (Right (),82)
 test44 = runEsSi (go 1 80 tickCollatz) 27 -- (Left "Upper bound",82)
 test45 = runEsSi (forever $ go 1 1000 tickCollatz) 27 -- (Left "Upper bound",1186)
 test46 = runEsSi (forever $ go 1 10000 tickCollatz) 27 -- (Left "Lower bound",1)
+
+
+{--
+Модифицируйте монаду
+`EsSi` из предыдущей задачи, обернув ее в трансформер
+`ReaderT` с окружением, представляющим собой пару целых чисел,
+задающих нижнюю и верхнюю границы для вычислений.
+
+Функции
+`go` теперь не надо будет передавать эти параметры, они будут браться из окружения.
+
+Сделайте получившуюся составную монаду трансформером:
+type RiiEsSiT m = ReaderT (Integer,Integer) (ExceptT String (StateT Integer m))
+
+Реализуйте также функцию для запуска этого трансформера
+runRiiEsSiT :: ReaderT (Integer,Integer) (ExceptT String (StateT Integer m)) a 
+                -> (Integer,Integer)  
+                -> Integer 
+                -> m (Either String a, Integer)
+
+и модифицируйте код функции `go`, изменив её тип на
+go :: Monad m => StateT Integer m Integer -> RiiEsSiT m ()
+
+так, чтобы для шага вычисления последовательности с отладочным выводом текущего элемента последовательности на экран
+tickCollatz' :: StateT Integer IO Integer
+tickCollatz' = do
+  n <- get
+  let res = if odd n then 3 * n + 1 else n `div` 2
+  lift $ putStrLn $ show res
+  put res
+  return n
+
+мы получили бы
+GHCi> runRiiEsSiT (forever $ go tickCollatz') (1,200) 27
+82
+41
+124
+62
+31
+94
+47
+142
+71
+214
+(Left "Upper bound",214)
+--}
+-- import Control.Monad
+-- import Control.Monad.Trans
+-- import Control.Monad.Trans.Reader
+-- import Control.Monad.Trans.State
+-- import Control.Monad.Trans.Except
+-- import qualified Control.Monad.Trans.Except as TE
+-- import qualified Control.Monad.Trans.Reader as TR
+
+-- type EsSi = TE.ExceptT String (State Integer)
+type RiiEsSiT m = TR.ReaderT (Integer, Integer) (TE.ExceptT String (StateT Integer m))
+-- ридер (стрелка) получает пару (lo, hi),
+-- значение ридера: иксепт-ийзер: left:string, right:state
+
+-- runEsSi :: EsSi a -> Integer -> (Either String a, Integer)
+-- runEsSi = runState . runExceptT
+runRiiEsSiT :: RiiEsSiT m a                                                                             -- RiiEsSiT a
+-- runRiiEsSiT :: (Monad m)=> TR.ReaderT (Integer, Integer) (TE.ExceptT String (StateT Integer m)) a    -- RiiEsSiT a
+                 -> (Integer, Integer)  -- lo, hi
+                 -> Integer             -- ini
+                 -> m (Either String a, Integer) -- пара: (изер err|v, state)
+runRiiEsSiT = \pair -> runStateT . TE.runExceptT . (TR.runReaderT pair)
+
+go2 :: (Monad m)=> StateT Integer m Integer -> RiiEsSiT m ()
+go2 next = do
+    _ <- lift $ lift next -- run computation in state
+    n <- lift $ lift get -- next colatz from state
+    (lower, upper) <- TR.ask
+    when (n <= lower) (lift $ TE.throwE "Lower bound")
+    when (n >= upper) (lift $ TE.throwE "Upper bound")
+
+{--
+runRiiEsSiT riiessi bounds start = runStateT (runExceptT (runReaderT riiessi bounds)) start
+go next = let
+        except_ = lift
+        state_ = lift . lift
+    in do
+        state_ next
+        (down, up) <- ask
+        n <- state_ get
+        except_ $ when (n >= up)   $ throwE "Upper bound"
+        except_ $ when (n <= down) $ throwE "Lower bound"
+
+runRiiEsSiT m e1 = runStateT (runExceptT (runReaderT m e1)) 
+go step = do
+  (lowerBound, upperBound) <- ask
+  x <- lift (lift (step >> get))
+  lift $ when (x >= upperBound) (throwE "Upper bound")
+  lift $ when (x <= lowerBound) (throwE "Lower bound")
+
+runRiiEsSiT =  (runStateT .) . (runExceptT .). runReaderT
+go action = do
+  (low, high) <- MTL.ask
+  void $ lift $ lift action
+  current <- MTL.get
+  when (current <= low)  $ MTL.throwError "Lower bound"
+  when (current >= high) $ MTL.throwError "Upper bound"
+
+runRiiEsSiT m bounds n = runStateT (runExceptT (runReaderT m bounds)) n
+go m = do
+    (min, max) <- ask
+    (lift . lift) m
+    x <- (lift . lift) $ get
+    when (x > max) (throwError "Upper bound")
+    when (x <= min) (throwError "Lower bound")
+    (lift . lift) $ put x
+    return ()
+--}
+
+-- end of solution
+
+tickCollatz2 :: StateT Integer IO Integer
+tickCollatz2 = do
+  n <- get
+  let res = if odd n then 3 * n + 1 else n `div` 2
+  lift $ putStrLn $ show res
+  put res
+  return n
+
+test47 = runRiiEsSiT (forever $ go2 tickCollatz2) (1, 200) 27
+{--
+82
+41
+124
+62
+31
+94
+47
+142
+71
+214
+(Left "Upper bound",214)
+--}
