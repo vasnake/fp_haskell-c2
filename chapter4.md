@@ -4,9 +4,19 @@
 
 [code sandbox](./chapter-4/test-transformers.hs)
 
-Мотивация: ???
+Мотивация: рассматриваем в деталях реализацию трансформеров: WriterT, StateT, ExceptT.
+Рефлексируем над проблемой лифтинга, смотрим на возможности неявного лифтинга: MultiParamTypeClasses.
+Реализация трансформеров: MTL vs transformers.
 
-definitions: ???
+definitions:
+- WriterT
+- StateT
+- ExceptT
+
+```hs
+
+```
+definitions
 
 ## chapter 4.1, Трансформер WriterT
 
@@ -20,14 +30,15 @@ https://stepik.org/lesson/38578/step/1?unit=20503
 - Стандартный интерфейс для WriterT
 - Совместное использование ReaderT и WriterT
 
-### 4.1.2 writer, runWriterT, execWriterT
+### 4.1.2 newtype WriterT, writer, execWriterT
 
-Writer: запись в "лог", пара, значение и моноид "лога".
+Writer: "запись в лог", сделано как пара (тупль) из (значения, моноида "лога").
+
 Моноид: нейтральный элемент и ассоциативная бинарная операция.
 
 Реализуем трансформер `WriterT`
 ```hs
-import Control.Applicative (liftA2)
+import Control.Applicative (liftA2) -- даух-параметрическая функция в аппликатив
 import Data.Tuple (swap)
 
 newtype Writer w a = Writer { runWriter :: (a, w) } -- было
@@ -46,7 +57,7 @@ runWriterT (WriterT (Just (42, "foo"))) -- внутренняя монада May
 writer :: (a, w) -> Writer w a -- конструктор монады врайтер, бесполезный
 writer = Writer
 
-writer :: (Monad m) => (a, w) -> WriterT w m a
+writer :: (Monad m)=> (a, w) -> WriterT w m a
 writer = WriterT . return -- упаковали во внутреннюю монаду (полиморфизм), упаковали во врайтер
 
 runWriterT (writer (42, "foo")) :: [(Int, String)] -- сняли полиморфизм, явно указав тип внутренней монады
@@ -55,7 +66,7 @@ runWriterT (writer (42, "foo")) :: [(Int, String)] -- сняли полимор�
 execWriter :: Writer w a -> w
 execWriter = snd . runWriter
 
-execWriterT :: (Monad m) => WriterT w m a -> m w
+execWriterT :: (Monad m)=> WriterT w m a -> m w
 execWriterT = (fmap snd) . runWriterT -- монада лога из монады пары получается через функтор (fmap)
 -- зачем сделали требование к контексту: Monad?
 -- liftM вместо fmap, в разных версиях библиотеки по разному
@@ -64,21 +75,21 @@ execWriterT = (fmap snd) . runWriterT -- монада лога из монады
 ```
 repl
 
-### 4.1.3 Functor WriterT
+### 4.1.3 Functor WriterT (lazy vs eager)
 
 Реализуем функтор для трансформера `WriterT`
 ```hs
-instance Functor (Writer w) where
+instance Functor (Writer w) where -- было
     fmap :: (a -> b) -> Writer w a -> Writer w b
     fmap f = Writer . updater . runWriter -- развернуть из оболочки, сгенерить новую пару, завернуть обратно в оболочку
         where updater ~(x, log) = (f x, log) -- ленивый пат.мат. `~`, irrefutable pattern
--- пара это функтор, но с обратным порядком элементов,
+-- пара это функтор, но для обратного порядка элементов,
 -- поэтому мы не можем здесь просто прокинуть fmap в пару, надо ручками реализовать
 
 -- в стандартной либе есть обе версии функтора: ленивый и энергичный,
 -- ленивый может падать по памяти из-за накопления thunk-ов, энергичный может падать на undefined или бесконечности
 
-instance (Functor m) => Functor (WriterT w m) where
+instance (Functor m)=> Functor (WriterT w m) where
     fmap :: (a -> b) -> WriterT w m a -> WriterT w m b
     fmap f = WriterT . (fmap updater) . runWriterT -- так же, только апдейт протаскивается во внутренний функтор через свой fmap
         where updater ~(x, log) = (f x, log)
@@ -98,7 +109,7 @@ repl
 Реализуем аппликативный функтор для `WriterT`.
 Теперь на лог надо наложить ограничения моноида, ибо в аппликативе надо складывать два лога.
 ```hs
-instance (Monoid w) => Applicative (Writer w) where
+instance (Monoid w)=> Applicative (Writer w) where -- было
     pure :: a -> Writer w a
     pure x = Writer (x, mempty)
     (<*>) :: Writer w (a -> b) -> Writer w a -> Writer w b
@@ -110,12 +121,12 @@ instance (Monoid w, Applicative m) => Applicative (WriterT w m) where
     pure :: a -> WriterT w m a
     pure x = WriterT (pure (x, mempty)) -- вызов пюре для внутренней монады (аппликатива)
 
-    -- liftA2 поднимает создание новой пары во внутреннюю монаду (аппликатив)
     (<*>) :: WriterT w m (a -> b) -> WriterT w m a -> WriterT w m b
-    f <*> v = WriterT $ liftA2 updater (runWriterT f) (runWriterT v)
+    f <*> v = WriterT $ liftA2 updater (runWriterT f) (runWriterT v) -- liftA2 поднимает создание новой пары во внутреннюю монаду
         where updater ~(g, w1) ~(x, w2) = (g x, w1 `mappend` w2)
 
 -- example
+
 runWriter (Writer ((*6), "foo ") <*> Writer (7, "bar"))
 (42, "foo bar")
 
@@ -129,9 +140,9 @@ runWriterT (WriterT [((^2), "^2"), ((^3), "^3")] <*> WriterT [(2, " 2"), (3, " 3
 ```
 repl
 
+### 4.1.5 test
+
 ```hs
-https://stepik.org/lesson/38578/step/5?unit=20503
-TODO
 {--
 Предположим, что мы дополнительно реализовали строгую версию аппликативного функтора `Writer`:
 
@@ -141,7 +152,7 @@ instance Functor (StrictWriter w) where
   fmap f  = StrictWriter . updater . runStrictWriter
     where updater (x, log) = (f x, log)
 
-instance Monoid w => Applicative (StrictWriter w) where
+instance (Monoid w)=> Applicative (StrictWriter w) where
   pure x  = StrictWriter (x, mempty)
   
   f <*> v = StrictWriter $ updater (runStrictWriter f) (runStrictWriter v)
@@ -149,8 +160,8 @@ instance Monoid w => Applicative (StrictWriter w) where
 
 и определили такие вычисления:
 
-actionLazy = Writer (42,"Hello!")
-actionStrict = StrictWriter (42,"Hello!")
+actionLazy = Writer (42, "Hello!")
+actionStrict = StrictWriter (42, "Hello!")
 
 Какие из следующих вызовов приведут к расходимостям?
 
@@ -164,6 +175,41 @@ Select all correct options from the list
 -- solution
 -- «приведут к расходимостям при вычислении до нормальной формы»
 
+- fst . runWriter $ take 5 <$> sequenceA (repeat actionLazy)
+нет расходимости: take 5 дает нам 5 элементов из списка результатов, fst забирает этот короткий список. Ленивость не дает вылезти бесконечному логу
+
+- fst . runStrictWriter $ take 5 <$> sequenceA (repeat actionStrict)
+есть расходимость: бесконечный лог из аппликатива проявляется в силу жадности вычислений в аппликативе
+
+- runStrictWriter $ take 5 <$> sequenceA (repeat actionStrict)
+есть расходимость: аналогично (fst . runStrictWriter) зависает на бесконечном логе в аппликативе
+
+- runWriter $ take 5 <$> sequenceA (repeat actionLazy)
+есть расходимость: при приведении к нормальной форме (не WHNF) получим бесконечность
+
+seq (runWriter $ take 5 <$> sequenceA (repeat actionLazy)) () 
+-- > seq считает до слабой головной нормальной формы, а мы имеем в виду вычисления до нормальной формы, то есть до значения.
+
+{--
+- repeat x is an infinite list, with x the value of every element.
+- sequenceA :: (Traversable t, Applicative f) => t (f a) -> f (t a)
+Evaluate each action in the structure from left to right, and collect the results.
+
+fst . runLazyWriter $ take 5 <$> sequenceA (repeat actionLazy) -- [42,42,42,42,42]
+fst . runStrictWriter $ take 5 <$> sequenceA (repeat actionStrict) -- hang
+runStrictWriter $ take 5 <$> sequenceA (repeat actionStrict) -- hang
+runLazyWriter $ take 5 <$> sequenceA (repeat actionLazy) -- inf log
+
+--}
+
+run на ленивом: результат требует пару из пятиэлементного списка и лога со всеми эффектами, то есть бесконечного — расходится.
+
+run на строгом: разойдётся уже на этапе sequenceA, ибо потребует вычисления всех значений и эффектов.
+
+fst . run на строгом: аналогично — расходится.
+
+fst . run на ленивом: результат требует только первый элемент пары, то есть пятиэлементный список, что вполне вычисляется, бесконечности вычислять будет лень.
+
 ```
 test
 
@@ -171,7 +217,7 @@ test
 
 Реализуем монаду для `WriterT`
 ```hs
-instance (Monoid w) => Monad (Writer w) where
+instance (Monoid w)=> Monad (Writer w) where -- было
     (>>=) :: Writer w a -> (a -> Writer w b) -> Writer w b
     -- реализация так записано, чтобы было похоже на ду-нотацию (см ниже, WriterT)
     m >>= k = Writer $ let -- завернули в оболочку врайтера
@@ -179,7 +225,7 @@ instance (Monoid w) => Monad (Writer w) where
         (v2, w2) = runWriter (k v1) -- вычислили стрелку Клейсли (зависимость от левой часли бинда), правая часть бинда
         in (v2, w1 `mappend` w2) -- создали новую пару
 
-instance (Monoid w, Monad m) => Monad (WriterT w m) where
+instance (Monoid w, Monad m)=> Monad (WriterT w m) where
     (>>=) :: WriterT w m a -> (a -> WriterT w m b) -> WriterT w m b
     m >>= k = WriterT $ do -- ду-нотация залезает во внутреннюю монаду, внешнюю оболочку снимают метки доступа `runWriterT`
         ~(v1, w1) <- runWriterT m -- левая часть, лениво
@@ -194,7 +240,7 @@ instance (Monoid w, Monad m) => Monad (WriterT w m) where
 runWriter $ do { x <- Writer (41, "foo"); return (succ x) }
 (42, "foo")
 runWriterT $ do {x <- writer (41, "foo"); return (succ x)} :: [(Int, String)] -- подсказка для полиморфного `writer`
-(42, "foo")
+[(42, "foo")]
 
 runWriterT $ do { 555 <- writer (41, "foo"); return 42 } :: [(Int, String)]
 [] -- был вызван и обработан `fail` на сломанном пат.мат. `555 <- ...`
@@ -208,6 +254,8 @@ repl
 
 Разные порядки вложенности монад в трансформерах
 ```hs
+-- логи от засохших веток исполнения не сохраняются. Кажется, что это не всегда то, что хочется получить
+-- Наверное, в таком случае нужно просто поменять порядок трансформеров
 import Control.Monad.Trans.Maybe
 import Control.Monad.Trans.Writer
 import Control.Monad.Trans.Class
@@ -244,6 +292,7 @@ extra
 
 memoization, Pascal triangle
 ```hs
+-- мемоизацию использовал естественную для рекуррентных соотношений в  Haskell - рекурсией списка
 import Data.List (intercalate)
 
 pascal :: [[Integer]]
@@ -262,6 +311,7 @@ main = do
   print (binomial' 5000 2000) -- быстро
 
 --- another attempt
+-- не все так хорошо по производительности, из линейного времени доступа к элементам списка
 
 import Data.List (intercalate)
 
@@ -281,10 +331,10 @@ main = do
   print (binomial' 1000 500) -- не так быстро, но все еще неплохо
 ```
 extra
+ 
+ ### 4.1.7 test
 
 ```hs
-https://stepik.org/lesson/38578/step/7?unit=20503
-TODO
 {--
 Сделайте на основе типа данных
 
@@ -296,7 +346,8 @@ LoggT :: (* -> *) -> * -> *
 
 newtype LoggT m a = LoggT { runLoggT :: m (Logged a) }
 
-Для этого реализуйте для произвольной монады `m` представителя класса типов `Monad` для `LoggT m :: * -> *`
+Для этого реализуйте представителя класса типов `Monad` для `LoggT m :: * -> *`
+для произвольной монады `m`
 
 instance Monad m => Monad (LoggT m) where
   return x = undefined
@@ -318,7 +369,7 @@ failTst xs = do
   LoggT [Logged "A" ()]
   return 42
 
-которые при правильной реализации монады должны вести себя так:
+которые (при правильной реализации монады) должны вести себя так:
 
 GHCi> runIdentity (runLoggT logTst)
 Logged "AAABBB" 42
@@ -336,6 +387,36 @@ instance Monad m => Monad (LoggT m) where
 
 -- solution
 
+import Control.Applicative
+instance (Monad m)=> Monad (LoggT m) where
+  fail = LoggT . fail
+  return = pure
+  m >>= k = LoggT $ do
+    ~(Logged s1 x1) <- runLoggT m
+    ~(Logged s2 x2) <- runLoggT (k x1)
+    return $ Logged (s1 ++ s2) x2
+instance (Applicative m)=> Applicative (LoggT m) where
+  pure = LoggT . pure . (Logged "") -- pure x = LoggT (pure (Logged "" x))
+  f <*> v = LoggT $ liftA2 updater (runLoggT f) (runLoggT v) where
+    updater ~(Logged s1 g) ~(Logged s2 x) = Logged (s1 ++ s2) (g x)
+instance (Functor m)=> Functor (LoggT m) where
+  fmap f = LoggT . (fmap updater) . runLoggT where
+    updater ~(Logged log x) = Logged log (f x)
+
+-- alternatives
+
+import           Control.Monad
+import           Data.Monoid
+instance Monad m => Functor (LoggT m) where fmap = liftM
+instance Monad m => Applicative (LoggT m) where pure = return; (<*>) = ap
+instance Monad m => Monad (LoggT m) where
+  return = LoggT . return . Logged ""
+  mx >>= f = LoggT $ do
+    ~(Logged s  x) <- runLoggT mx
+    ~(Logged s' y) <- runLoggT (f x)
+    return $ Logged (s <> s') y
+  fail = LoggT . fail
+
 ```
 test
 
@@ -346,13 +427,14 @@ test
 class MonadTrans t where
     lift :: (Monad m) => m a -> t m a
 
-instance (Monoid w) => MonadTrans (WriterT w) where
-    lift :: (Monad m) => m a -> WriterT w m a
-    lift m = WriterT $ do
+instance (Monoid w)=> MonadTrans (WriterT w) where
+    lift :: (Monad m)=> m a -> WriterT w m a
+    lift m = WriterT $ do -- нужно перепаковать значение из пришедшей монады в пару-внутри-монады
         x <- m -- вынули из пришедшей монады
         return (x, mempty) -- засунули во внутреннюю монаду, добавив пустой лог
 
 -- example
+
 wl3 = WriterT $ [(1, "one"), (10, "ten"), (20, "twenty")]
 runWriterT $ do { x <- wl3; f <- lift [pred, succ]; return (f x) }
 [(0, "one"), (2, "one"), (9, "ten"), (11, "ten"), (19, "twenty"), (21, "twenty")]
@@ -361,27 +443,27 @@ runWriterT $ do { x <- wl3; f <- lift [pred, succ]; return (f x) }
 ```
 repl
 
-### 4.1.9 tell, listen, censor
+### 4.1.9 WriterT (tell, listen, censor)
 
-Стандартный интерфейс, `tell, listen, censor`
+Стандартный интерфейс Writer: `tell, listen, censor`
 ```hs
 tell :: w -> Writer w ()
 tell w = Writer ((), w)
 
-tell :: (Monad m) => w -> WriterT w m ()
-tell w = writer ((), w)
+tell :: (Monad m)=> w -> WriterT w m ()
+tell w = writer ((), w) -- пишем в лог
 
 -- example
 runWriterT $ do { x <- wl3; f <- lift [pred, succ]; tell " foo"; return (f x) }
 [(0, "one foo"), (2, "one foo"), (9, "ten foo"), (11, "ten foo"), (19, "twenty foo"), (21, "twenty foo")]
 
--- по аналогии с юниксовым `tee`, выдать лог в отдельный канал для побочной обработки
-listen :: (Monad m) => WriterT w m a -> WriterT w m (a, w)
+-- по аналогии с юниксовым `tee`: выдать лог в отдельный канал для побочной обработки
+listen :: (Monad m)=> WriterT w m a -> WriterT w m (a, w)
 listen m = WriterT $ do
     ~(a, w) <- runWriterT m
     return ((a, w), w) -- перепаковка структуры
 
-censor :: (Monad m) => (w -> w) -> WriterT w m a -> WriterT w m a
+censor :: (Monad m)=> (w -> w) -> WriterT w m a -> WriterT w m a
 censor f m = WriterT $ do
     ~(a, w) <- runWriterT m
     return (a, f w) -- дополнительная трансформация лога
@@ -392,9 +474,9 @@ runWriterT (censor (\(c:cs) -> [c]) wl3)
 ```
 repl
 
+### 4.1.10 test
+
 ```hs
-https://stepik.org/lesson/38578/step/10?unit=20503
-TODO
 {--
 Напишите функцию `write2log` обеспечивающую трансформер `LoggT` стандартным логгирующим интерфейсом:
 
@@ -403,10 +485,10 @@ write2log = undefined
 
 Эта функция позволяет пользователю осуществлять запись в лог в процессе вычисления в монаде `LoggT m` 
 для любой монады `m`
+
 Введите для удобства упаковку для `LoggT Identity` и напишите функцию запускающую вычисления в этой монаде
 
 type Logg = LoggT Identity
-
 runLogg :: Logg a -> Logged a
 runLogg = undefined
 
@@ -448,12 +530,33 @@ runLogg = undefined
 
 -- solution
 
+write2log :: (Monad m)=> String -> LoggT m ()
+write2log s = LoggT $ return (Logged s ())
+type Logg = LoggT Identity
+runLogg :: Logg a -> Logged a
+runLogg = runIdentity . runLoggT -- runLogg (LoggT m) = runIdentity m
+
+-- alternatives
+
+write2log :: Monad m => String -> LoggT m ()
+write2log = LoggT . return . (`Logged` ())
+type Logg = LoggT Identity
+runLogg :: Logg a -> Logged a
+runLogg = runIdentity . runLoggT
+
+write2log :: Monad m => String -> LoggT m ()
+write2log = LoggT . return . (flip Logged ())
+type Logg = LoggT Identity
+runLogg :: Logg a -> Logged a
+runLogg = runIdentity . runLoggT
+
 ```
 test
 
 ### 4.1.11 пример композиции трансформеров
 
 Небольшое упражнение на объединение `ReaderT`, `WriterT`.
+
 Предполагается, что автор разнес реализацию по трем модулям
 ```hs
 import MonadTrans
@@ -465,13 +568,13 @@ import Data.Char (toUpper)
 
 -- это ридер
 logFirstAndRetSecond :: 
-    ReaderT [String] -- внешняя монада, трансформер, енв как список строк
-    (WriterT String Identity) -- внутренняя монада (составлена из трансформера над айдентити), лог как строка
-    String -- содержимое ридера
+    ReaderT [String] -- внешняя монада, трансформер, енв это список строк
+    (WriterT String Identity) -- внутренняя монада (составлена из трансформера над айдентити), лог это строка
+    String -- содержимое композитной монады
 logFirstAndRetSecond = do
-    el1 <- asks head
-    el2 <- asks (map toUpper . head . tail)
-    lift $ tell el1 -- голову записали в лог (внутренняя монада)
+    el1 <- asks head -- ридер
+    el2 <- asks (map toUpper . head . tail) -- ридер
+    lift $ tell el1 -- голову записали в лог (внутренняя монада) -- райтер
     return el2
 
 strings = ["ab", "cd", "fg"]
@@ -481,19 +584,18 @@ runIdentity $ runWriterT (runReaderT logFirstAndRetSecond strings)
 ```
 repl
 
-```hs
-https://stepik.org/lesson/38578/step/12?unit=20503
-TODO
-{--
-В последнем примере предыдущей задачи функция 
+### 4.1.12 test
 
+```hs
+{--
+В последнем примере предыдущей задачи функция
 lift :: (MonadTrans t, Monad m) => m a -> t m a 
 
-позволяла поднять вычисление из внутренней монады (в примере это был `Logg`) во внешний трансформер (`StateT Integer`). 
-Это возможно, поскольку для трансформера `StateT s` реализован представитель класса типов 
+позволяла поднять вычисление из внутренней монады (в примере это был `Logg`) во внешний трансформер (`StateT Integer`).
+Это возможно, поскольку для трансформера `StateT s` реализован представитель класса типов
 MonadTrans из Control.Monad.Trans.Class
 
-Сделайте трансформер `Logg`T представителем этого класса `MonadTrans`, 
+Сделайте трансформер `Logg`T представителем этого класса `MonadTrans`,
 так чтобы можно было поднимать вычисления из произвольной внутренней монады в наш трансформер:
 
 instance MonadTrans LoggT where
@@ -516,6 +618,20 @@ instance MonadTrans LoggT where
   lift = undefined
 
 -- solution
+
+instance MonadTrans LoggT where
+  -- lift :: (Monad m)=> m a -> LoggT m a
+  lift = LoggT . fmap (Logged "")
+  -- lift m = LoggT $ fmap (Logged "") m
+  -- lift m = LoggT $ do
+  --   x <- m
+  --   return (Logged "" x)
+
+-- alternatives
+
+instance MonadTrans LoggT where lift m = LoggT $ Logged "" <$> m
+
+instance MonadTrans LoggT where lift = LoggT . fmap (Logged "")
 
 ```
 test
