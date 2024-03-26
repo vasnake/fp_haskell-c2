@@ -6,12 +6,13 @@
 
 Мотивация: две утилитарные монады, Except, Cont.
 Позволяют control flow в монадических вычислениях (наряду с функцией guard).
-Откуда плавно переходим к композиции монад в случае, если нам надо получить набор эффектов вместо одного.
+Откуда плавно переходим к композиции монад (трансформеры) в случае, если нам надо получить набор эффектов вместо одного.
 Матрешка из монад.
 
 definitions:
 - Except (throwE, catchE, withExcept): обвязка над Either, either
 - Cont (runCont, evalCont, callCC)
+- ReaderT (ask, asks, local, lift)
 
 ```hs
 newtype Except e a = Except { runExcept :: Either e a } deriving Show
@@ -155,9 +156,51 @@ callCC f = Cont $
 callCC :: ((a -> (b -> r) -> r) -> (a -> r) -> r) -> (a -> r) -> r
 callCC f = \c -> f(\a _ -> c a) c
 
+-- transformers
+
+newtype ReaderT r m a = ReaderT { runReaderT :: r -> m a } -- стало, m это еще один параметр, внутренняя монада
+
+reader :: (Monad m)=> (r -> a) -> ReaderT r m a -- конструктор трансформера
+reader f = ReaderT (return . f) -- return after f, ретурн это стандартный способ заворачивания в монаду
+
+instance (Functor m)=> Functor (ReaderT r m) where -- функтор трансформера возможен если внутренняя монада тоже функтор
+    fmap :: (a -> b) -> ReaderT r m a -> ReaderT r m b
+    fmap f rma = ReaderT (rmb) where rmb = (fmap f) . (runReaderT rma) -- композиция двух стрелок
+
+instance (Applicative m)=> Applicative (ReaderT r m) where
+    pure :: a -> ReaderT r m a
+    pure = ReaderT . const . pure -- дополнительно запакуем в аппликатив внутренней монады, pure
+    (<*>) :: ReaderT r m (a -> b) -> ReaderT r m a -> ReaderT r m b
+    rmab <*> rma = ReaderT rmb where rmb = \env -> (runReaderT rmab env) <*> (runReaderT rma env)
+    rmab <*> rma = ReaderT rmb where rmb = liftA2 (<*>) (runReaderT rmab) (runReaderT rma)
+
+instance (Monad m)=> Monad (ReaderT r m) where
+    (>>=) :: ReaderT r m a -> (a -> ReaderT r m b) -> ReaderT r m b -- m >>= k
+    m >>= k = ReaderT rmb where rmb = \env -> do -- do: подняли вычисления во внутреннюю монаду, код 1-в-1 с `Reader`
+        v <- runReaderT m env
+        runReaderT (k v) env
+
+class MonadTrans t where
+    lift :: (Monad m) => m a -> t m a
+
+-- законы лифта: естественное преобразование, не меняющее структуру монады
+-- 1: lift . return = return -- сравнение в контексте `t m a` а не `m a`
+-- 2: lift (m >>= k) = lift m >>= (lift . k)
+
+instance MonadTrans (ReaderT r) where
+    lift :: (Monad m) => m a -> ReaderT m a
+    lift m = ReaderT (\_ -> m) -- ридер это стрелочный тип, поэтому лямбда
+
+ask :: (Monad m)=> ReaderT r m r -- для трансформера стало так
+ask = ReaderT return
+
+asks :: (Monad m) => (r -> a) -> ReaderT r m a -- для трансформера стало так
+asks f = ReaderT (return . f) -- внутренняя монада требует наличия `return`
+
+local :: (r -> r) -> ReaderT r m a -> ReaderT r m a
+local f rma = ReaderT ((runReaderT rma) . f) -- так как ридер это функция, имееем композицию функций
 ```
 definitions
-
 
 ## chapter 3.1, Монада Except
 

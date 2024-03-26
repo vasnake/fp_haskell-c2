@@ -1,12 +1,13 @@
--- {-# LANGUAGE TypeOperators #-} -- для разрешения `|.|` в качестве имени оператора над типами
--- {-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE InstanceSigs #-} -- позволяет писать сигнатуры для инстансов
 {-# LANGUAGE FunctionalDependencies #-}
+-- {-# LANGUAGE TypeOperators #-} -- для разрешения `|.|` в качестве имени оператора над типами
+-- {-# LANGUAGE PolyKinds #-}
 -- {-# LANGUAGE MultiParamTypeClasses #-}
 
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 {-# OPTIONS_GHC -Wno-noncanonical-monad-instances #-}
 {-# OPTIONS_GHC -Wno-noncanonical-monoid-instances #-}
+{-# OPTIONS_GHC -Wno-typed-holes #-}
 
 {-# HLINT ignore "Use traverse_" #-}
 {-# HLINT ignore "Use sum" #-}
@@ -50,13 +51,14 @@ import Control.Monad ( liftM, mplus, guard, mfilter, ap, guard, MonadPlus(..), w
 -- import Control.Monad (liftM, ap, MonadPlus(..), guard, msum)
 -- import Control.Applicative (Alternative(..))
 
--- import Control.Monad.Trans.Reader as TR hiding (reader, Reader, ReaderT, runReader, runReaderT )
--- import Control.Monad.Trans.Reader as TR ( asks)
- -- ( ask, asks, Reader(..), ReaderT(..) )
-
--- import Control.Monad.Trans.Writer ( runWriter, tell, Writer )
--- import Control.Monad.Trans ( lift )
 import Control.Monad.Trans.Class
+-- import Control.Monad.Trans ( lift )
+import qualified Control.Monad.Trans.Writer as TW
+import qualified Control.Monad.Trans.Reader as TR
+import qualified Control.Monad.Trans.Except as TE
+-- import Control.Monad.Trans.Writer ( runWriter, tell, Writer )
+-- import Control.Monad.Trans.Reader as TR hiding (reader, Reader, ReaderT, runReader, runReaderT )
+-- import Control.Monad.Trans.Reader as TR ( asks) -- ( ask, asks, Reader(..), ReaderT(..) )
 
 -- import GHC.Show (Show)
 -- import GHC.Base (Eq)
