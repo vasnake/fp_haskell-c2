@@ -19,6 +19,8 @@
 {-# HLINT ignore "Redundant bracket" #-}
 {-# HLINT ignore "Use <$>" #-}
 {-# HLINT ignore "Use const" #-}
+{-# HLINT ignore "Use tuple-section" #-}
+{-# HLINT ignore "Avoid lambda" #-}
 
 module TestTransformers where
 
@@ -36,6 +38,7 @@ import Data.Functor ( (<&>) )
 
 import Control.Applicative (
     Alternative(..), Applicative(..), (<*>), (<$>), ZipList(..), (<**>), (<|>), liftA2,
+    Const(..),
     )
 
 import Data.Foldable (
@@ -593,3 +596,83 @@ logSt = do
   return $ a * 100
 
 test11 = TS.runState (runLoggT logSt) 2 -- (Logged "30" 300,42)
+
+
+{--
+Реализуйте функции `evalStateT` и `execStateT`
+--}
+-- import qualified Control.Monad.Trans.State as TS
+evalStateT :: (Monad m)=> TS.StateT s m a -> s -> m a
+evalStateT st = fmap fst . TS.runStateT st
+-- evalStateT m s = fst <$> (TS.runStateT m s)
+
+execStateT :: (Monad m)=> TS.StateT s m a -> s -> m s
+execStateT st = fmap snd . TS.runStateT st
+
+-- end of solution
+
+
+{--
+Нетрудно понять, что монада `State` более «сильна», чем монада `Reader`:
+вторая тоже, в некотором смысле, предоставляет доступ к глобальному состоянию,
+но только, в отличие от первой, не позволяет его менять.
+
+Покажите, как с помощью `StateT` можно эмулировать `ReaderT`:
+
+GHCi> evalStateT (readerToStateT $ asks (+2)) 4
+6
+GHCi> runStateT  (readerToStateT $ asks (+2)) 4
+(6,4)
+--}
+
+-- import qualified Control.Monad.Trans.Reader as TR
+-- import qualified Control.Monad.Trans.State as TS
+readerToStateT :: (Monad m)=> TR.ReaderT r m a -> TS.StateT r m a
+readerToStateT (TR.ReaderT k) = TS.StateT (\st -> convert st) where
+  convert st = (\x -> (x, st)) <$> (k st) -- (s -> m a) -> (s -> m (a, s))
+-- readerToStateT rt = TS.StateT $ \s -> do
+--   let ma = TR.runReaderT rt s
+--   a <- ma
+--   return (a, s)
+{--
+readerToStateT (ReaderT f) = StateT $ \s -> do { x <- f s; return (x, s) }
+
+readerToStateT = StateT . (fmap <$> flip (,) <*>) . runReaderT -- жонглирование стрелками, охуенчик
+
+readerToStateT rd = StateT fun where fun r = (\a -> (a, r)) <$> runReaderT rd r
+
+readerToStateT (ReaderT rr) = StateT $ \s -> fmap (flip (,) s) (rr s)
+--}
+-- end of solution
+
+test13 :: IO Integer
+test13 = TS.evalStateT (readerToStateT $ TR.asks (+2)) 4 -- 6
+test12 :: IO (Integer, Integer)
+test12 = TS.runStateT  (readerToStateT $ TR.asks (+2)) 4 -- (6,4)
+
+
+{--
+Какие из перечисленных конструкторов типов являются представителями класса `Applicative`? 
+(Мы пока ещё не видели реализацию представителя класса `Monad` для нашего трансформера `StateT`, 
+но предполагается, что все уже догадались, что она скоро появится.)
+
+Select all correct options from the list
+- StateT Int (Writer (Sum Int))
+- StateT () (StateT Int (Const ()))
+- StateT () (ReaderT Int (Writer String))
+- StateT Int ZipList
+- StateT () (ReaderT Int ZipList)
+- StateT String (Const Int)
+--}
+type X1 = TS.StateT Int (TW.Writer (Sum Int)) -- yes, райтер над моноидом
+type X3 = TS.StateT () (TR.ReaderT Int (TW.Writer String))
+
+type X2 = TS.StateT () (TS.StateT Int (Const ())) -- no, нет монады над Конст но она нужна стейту
+type X4 = TS.StateT Int ZipList -- no, нет монады над зиплист но она нужна стейту
+type X5 = TS.StateT () (TR.ReaderT Int ZipList) -- no, аналогично
+type X6 = TS.StateT String (Const Int) -- no, аналогично
+
+test14 :: X1 Char
+test14 = pure 'a'
+test15 :: X3 Char
+test15 = pure 'b'
