@@ -21,6 +21,7 @@
 {-# HLINT ignore "Use const" #-}
 {-# HLINT ignore "Use tuple-section" #-}
 {-# HLINT ignore "Avoid lambda" #-}
+{-# HLINT ignore "Eta reduce" #-}
 
 module TestTransformers where
 
@@ -136,6 +137,7 @@ censor f m = WriterT $ do
 -- class MonadTrans t where
 --   lift :: Monad m => m a -> t m a
 
+{--
 newtype StateT s m a = StateT { runStateT :: s -> m (a,s) }
 
 state :: Monad m => (s -> (a, s)) -> StateT s m a
@@ -167,6 +169,8 @@ instance MonadTrans (StateT s) where
   lift m = StateT $ \st -> do
     a <- m
     return (a, st)
+
+--}
 
 get :: Monad m => StateT s m s
 get = state $ \s -> (s, s)
@@ -601,6 +605,8 @@ test11 = TS.runState (runLoggT logSt) 2 -- (Logged "30" 300,42)
 {--
 Реализуйте функции `evalStateT` и `execStateT`
 --}
+
+{--
 -- import qualified Control.Monad.Trans.State as TS
 evalStateT :: (Monad m)=> TS.StateT s m a -> s -> m a
 evalStateT st = fmap fst . TS.runStateT st
@@ -608,9 +614,9 @@ evalStateT st = fmap fst . TS.runStateT st
 
 execStateT :: (Monad m)=> TS.StateT s m a -> s -> m s
 execStateT st = fmap snd . TS.runStateT st
+--}
 
 -- end of solution
-
 
 {--
 Нетрудно понять, что монада `State` более «сильна», чем монада `Reader`:
@@ -676,3 +682,162 @@ test14 :: X1 Char
 test14 = pure 'a'
 test15 :: X3 Char
 test15 = pure 'b'
+
+
+{--
+Неудачное сопоставление с образцом аварийно прерывает вычисление
+(для реализованного на предыдущих видео-степах трансформера `StateT`):
+
+GHCi> sl2 = StateT $ \st -> [(st,st),(st+1,st-1)]
+GHCi> runStateT (do {6 <- sl2; return ()}) 5
+*** Exception: Pattern match failure in do expression ...
+
+Исправьте реализацию таким образом, чтобы обработка такой ситуации переадресовывалась бы внутренней монаде:
+
+GHCi> sl2 = StateT $ \st -> [(st,st),(st+1,st-1)]
+GHCi> runStateT (do {6 <- sl2; return ()}) 5
+[((),4)]
+GHCi> sm = StateT $ \st -> Just (st+1,st-1)
+GHCi> runStateT (do {42 <- sm; return ()}) 5
+Nothing
+--}
+-- import Control.Monad.Trans.Class -- not working
+newtype StateT s m a = StateT { runStateT :: s -> m (a,s) }
+
+state :: Monad m => (s -> (a, s)) -> StateT s m a
+state f = StateT (return . f)
+
+execStateT :: Monad m => StateT s m a -> s -> m s
+execStateT m = fmap snd . runStateT m 
+
+evalStateT :: Monad m => StateT s m a -> s -> m a
+evalStateT m = fmap fst . runStateT m
+
+instance Functor m => Functor (StateT s m) where
+  fmap f m = StateT $ \st -> fmap updater $ runStateT m st
+    where updater ~(x, s) = (f x, s)
+
+instance Monad m => Applicative (StateT s m) where
+  pure x = StateT $ \ s -> return (x, s)
+
+  f <*> v = StateT $ \ s -> do
+      ~(g, s') <- runStateT f s
+      ~(x, s'') <- runStateT v s'
+      return (g x, s'')
+
+instance Monad m => Monad (StateT s m) where
+  -- fail = lift . fail where lift m = StateT (\st -> (\x -> (x, st)) <$> m)
+  -- fail  = StateT . const . fail -- alternative
+  m >>= k  = StateT $ \s -> do
+    ~(x, s') <- runStateT m s
+    runStateT (k x) s'
+
+-- end of solution
+
+instance MonadTrans (StateT s) where
+  lift :: Monad m => m a -> StateT s m a
+  -- lift m = StateT $ \st -> do { a <- m; return (a, st) }
+  lift m = StateT (\st -> (\x -> (x, st)) <$> m)
+
+instance (MonadFail m)=> MonadFail (StateT s m) where
+  fail :: String -> StateT s m a
+  fail = lift . fail where
+    -- lift :: Monad m => m a -> StateT s m a
+    lift m = StateT (\st -> (\x -> (x, st)) <$> m)
+
+sl2 = StateT $ \st -> [(st, st), (st+1, st-1)]
+test17 = runStateT (do {6 <- sl2; return ()}) 5 -- [((),4)]
+sm = StateT $ \st -> Just (st+1,st-1)
+test16 = runStateT (do {42 <- sm; return ()}) 5 -- Nothing
+
+
+{--
+Те из вас, кто проходил первую часть нашего курса, конечно же помнят, последнюю задачу из него.
+В тот раз всё закончилось монадой `State`, но сейчас с неё все только начинается!
+
+data Tree a = Leaf a | Fork (Tree a) a (Tree a)
+
+Вам дано значение типа `Tree ()`, иными словами, вам задана форма дерева.
+От вас требуется сделать две вещи:
+во-первых, пронумеровать вершины дерева, обойдя их `in-order` обходом (LNR: левое поддерево, вершина, правое поддерево);
+во-вторых, подсчитать количество листьев в дереве.
+
+GHCi> numberAndCount (Leaf ())
+(Leaf 1,1)
+GHCi> numberAndCount (Fork (Leaf ()) () (Leaf ()))
+(Fork (Leaf 1) 2 (Leaf 3),2)
+
+Конечно, можно решить две подзадачи по-отдельности, но мы сделаем это всё за один проход.
+
+Если бы вы писали решение на императивном языке, вы бы обошли дерево,
+поддерживая в одной переменной следующий доступный номер для очередной вершины,
+а в другой — количество встреченных листьев, причем само значение второй переменной,
+по сути, в процессе обхода не требуется. 
+
+Значит, вполне естественным решением будет завести состояние для первой переменной, а количество листьев накапливать в «логе»-моноиде.
+
+Вот так выглядит код, запускающий наше вычисление и извлекающий результат:
+
+numberAndCount :: Tree () -> (Tree Integer, Integer)
+numberAndCount t = getSum <$> runWriter (evalStateT (go t) 1)
+  where
+    go :: Tree () -> StateT Integer (Writer (Sum Integer)) (Tree Integer)
+    go = undefined
+
+Вам осталось только описать само вычисление — функцию `go`
+--}
+-- data Tree a = Leaf a | Fork (Tree a) a (Tree a) deriving (Eq, Show)
+
+-- Нам надо уметь отделять листы от форков, ибо: количество листов и нумерация нод.
+go :: Tree () -> TS.StateT Integer (TW.Writer (Sum Integer)) (Tree Integer)
+go = traverse_ withState where
+  traverse_ f (Leaf x) = let res = Leaf <$> (f x) in res <* do { lift $ TW.tell (Sum 1) }
+  traverse_ f (Fork l x r) = Fork <$> (traverse_ f l) <*> (f x) <*> (traverse_ f r)
+  withState _ = do          -- _ это юнит, игнорим
+    n <- TS.get             -- взять текущий номер из стейта
+    TS.modify succ          -- следующий номер положить в стейт
+    -- lift $ TW.tell (Sum 1)  -- добавить в лог врайтера 1 (но только если это лист!)
+    return n                -- номер узла
+
+{--
+go (Leaf _)     = lift (tell (Sum 1)) >> Leaf <$> pick
+go (Fork l m r) = Fork <$> go l <*> pick <*> go r
+pick = state ((,) <$> id <*> (+1))
+
+go (Leaf _)            = liftM  Leaf step <* lift (tell $ Sum 1)
+go (Fork left _ right) = liftM3 Fork (go left) step (go right)
+step                   = get <* modify succ
+
+go :: Tree () -> TS.StateT Integer (TW.Writer (Sum Integer)) (Tree Integer)
+на входе дерево, на выходе матрешка (трансформер):
+Стейт инт монада, 
+где монада: врайтер (лог:сумма, значение:дерево-номер)
+где сумма это количество листьев, значение ноды это порядковый номер ноды (ин-ордер)
+
+Значит: надо сделать траверс дерева,
+записывая в стейт текущий номер ноды, добавляя в "лог" врайтера 1 при встрече листа;
+заменяя значение дерева с () на номер из стейта
+
+Это можно было бы сделать обычным траверсом, но: траверс обойдет все ноды не разбирая лист/форк.
+Нам надо уметь отделять листы от форков, ибо: количество листов и нумерация нод.
+
+ghci> :t traverse
+  :: (Traversable t, Applicative f) => (a -> f b) -> t a -> f (t b)
+--}
+
+-- end of solution
+
+data Tree a = Leaf a | Fork (Tree a) a (Tree a) deriving (Eq, Show)
+
+numberAndCount :: Tree () -> (Tree Integer, Integer)
+numberAndCount t = getSum <$> TW.runWriter (TS.evalStateT (go t) 1)
+
+test19 = numberAndCount (Leaf ()) -- (Leaf 1,1)
+test18 = numberAndCount (Fork (Leaf ()) () (Leaf ())) -- (Fork (Leaf 1) 2 (Leaf 3),2)
+
+instance Functor Tree where fmap = fmapDefault
+instance Foldable Tree where foldMap = foldMapDefault
+instance Traversable Tree where
+  traverse g (Leaf x) = Leaf <$> (g x)
+  traverse g (Fork l x r) = Fork <$> (traverse g l) <*> (g x) <*> (traverse g r)
+-- foo tree = traverse (const $ TS.modify succ >> TS.get) tree

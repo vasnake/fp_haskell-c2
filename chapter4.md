@@ -14,6 +14,79 @@ definitions:
 - ExceptT
 
 ```hs
+-- Writer
+
+newtype WriterT w m a = WriterT { runWriterT :: m (a, w) }
+
+writer :: (Monad m)=> (a, w) -> WriterT w m a -- конструктор
+writer = WriterT . return -- упаковали во внутреннюю монаду (полиморфизм), упаковали во врайтер
+
+execWriterT :: (Monad m)=> WriterT w m a -> m w -- доступ к логу
+execWriterT = (fmap snd) . runWriterT -- монада лога из монады пары получается через функтор (fmap)
+
+instance (Functor m)=> Functor (WriterT w m) where
+    fmap :: (a -> b) -> WriterT w m a -> WriterT w m b
+    fmap f = WriterT . (fmap updater) . runWriterT
+        where updater ~(x, log) = (f x, log)
+
+instance (Monoid w, Applicative m) => Applicative (WriterT w m) where
+    pure :: a -> WriterT w m a
+    pure x = WriterT (pure (x, mempty)) -- вызов пюре для внутренней монады (аппликатива)
+    (<*>) :: WriterT w m (a -> b) -> WriterT w m a -> WriterT w m b
+    f <*> v = WriterT $ liftA2 updater (runWriterT f) (runWriterT v) -- liftA2 поднимает создание новой пары во внутреннюю монаду
+        where updater ~(g, w1) ~(x, w2) = (g x, w1 `mappend` w2)
+
+instance (Monoid w, Monad m)=> Monad (WriterT w m) where
+    (>>=) :: WriterT w m a -> (a -> WriterT w m b) -> WriterT w m b
+    m >>= k = WriterT $ do -- ду-нотация залезает во внутреннюю монаду, внешнюю оболочку снимают метки доступа `runWriterT`
+        ~(v1, w1) <- runWriterT m -- левая часть, лениво
+        ~(v2, w2) <- runWriterT (k v1) -- правая часть, лениво
+        return (v2, w1 `mappend` w2) -- упаковали во внутреннюю монаду
+    fail :: String -> WriterT w m a -- вопрос, что делать при ошибках? ХЗ, зависит от семантики
+    fail = WriterT . fail -- делегируем обработку ошибки во внутреннюю монаду (если это спиисок, то будет эффект прерывания цикла)
+
+instance (Monoid w)=> MonadTrans (WriterT w) where
+    lift :: (Monad m)=> m a -> WriterT w m a
+    lift m = WriterT $ do -- нужно перепаковать значение из пришедшей монады в пару-внутри-монады
+        x <- m -- вынули из пришедшей монады
+        return (x, mempty) -- засунули во внутреннюю монаду, добавив пустой лог
+
+tell :: (Monad m) => w -> WriterT w m ()
+tell w = writer ((), w)
+
+listen :: (Monad m)=> WriterT w m a -> WriterT w m (a, w)
+listen m = WriterT $ do
+    ~(a, w) <- runWriterT m
+    return ((a, w), w) -- перепаковка структуры
+
+censor :: (Monad m)=> (w -> w) -> WriterT w m a -> WriterT w m a
+censor f m = WriterT $ do
+    ~(a, w) <- runWriterT m
+    return (a, f w) -- дополнительная трансформация лога
+
+-- State
+
+newtype StateT s m a = StateT { runStateT :: s -> m (a, s) }
+
+state :: (Monad m) => (s -> (a, s)) -> StateT s m a
+state f = StateT (return . f) -- `return . f` завернем результат стрелки в монаду (внутреннюю)
+
+evalStateT = (fmap fst .). runStateT
+execStateT = (fmap snd .). runStateT
+
+instance (Functor m) => Functor (StateT s m) where
+  fmap :: (a -> b) -> StateT s m a -> StateT s m b
+  fmap f m = StateT $ \st -> -- ключевой момент: использование внутреннего fmap для затаскивания функции во внутреннюю монаду
+    fmap updater (runStateT m st) where updater ~(x, s) = (f x, s)
+
+instance (Monad m)=> Applicative (StateT s m) where
+  pure :: a -> StateT s m a
+  pure x = StateT $ \s -> return (x, s) -- добавился внутремонадный `return` для заворачивания пары
+  (<*>) :: StateT s m (a -> b) -> StateT s m a -> StateT s m b
+  f <*> v = StateT $ \s -> do -- появлась ду-нотация для доступа во внутреннюю монаду
+      ~(g, s') <- runStateT f s
+      ~(x, s'') <- runStateT v s'
+      return (g x, s'')
 
 ```
 definitions
@@ -969,32 +1042,32 @@ instance Monad (State s) where
   (>>=) :: State s a -> (a -> State s b) -> State s b
   m >>= k = State S \s -> -- стрелочный тип внутри стейт, поэтому лямбда, начальный стейт приходит снаружи
     let (x, s2) = runState m s -- левое вычисление
-    in  runState (k x) s2 -- правое вычисление, с учетом результатов левого (и структура и стейт могут меняться)
+    in  runState (k x) s2 -- правое вычисление, с учетом результатов левого (стейт можно поменять в зависимости от значения в левой м.)
 
 -- для трансформера стало так:
-instance (Monad m) => Monad (StateT s m) where
+instance (Monad m)=> Monad (StateT s m) where
   (>>=) :: StateT s m a -> (a -> StateT s m b) -> StateT s m b
   m >>= k  = StateT $ \s -> do -- ду-нотация для прохода во внутреннюю монаду
     ~(x, s') <- runStateT m s -- ленивый пат.мат., левое вычисление
     runStateT (k x) s' -- правое вычисление
 
 -- example
+
 stT1 = state $ \x -> ((^2), x+2)
 stT2 = state $ \x -> (x, x+3)
 ghci> runStateT (do { g <- stT1; x <- stT2; return (g x) }) 5 -- внутренняя монада IO (repl)
 (49,10) -- ^2, 5+2; 7^2, 7+3
 -- обратите внимание, в выражении работы с монадами стейт,
 -- мы работаем со значением, стейт остается за кадром, внутри определения монад stT1, stT2
-
 ```
 repl
 
+### 4.2.11 test
+
 ```hs
-https://stepik.org/lesson/38579/step/11?unit=20504
-TODO
 {--
-Неудачное сопоставление с образцом для реализованного на предыдущих видео-степах 
-трансформера `StateT` аварийно прерывает вычисление:
+Неудачное сопоставление с образцом аварийно прерывает вычисление
+(для реализованного на предыдущих видео-степах трансформера `StateT`):
 
 GHCi> sl2 = StateT $ \st -> [(st,st),(st+1,st-1)]
 GHCi> runStateT (do {6 <- sl2; return ()}) 5
@@ -1039,6 +1112,32 @@ instance Monad m => Monad (StateT s m) where
 
 -- solution
 
+newtype StateT s m a = StateT { runStateT :: s -> m (a,s) }
+state :: Monad m => (s -> (a, s)) -> StateT s m a
+state f = StateT (return . f)
+execStateT :: Monad m => StateT s m a -> s -> m s
+execStateT m = fmap snd . runStateT m 
+evalStateT :: Monad m => StateT s m a -> s -> m a
+evalStateT m = fmap fst . runStateT m
+instance Functor m => Functor (StateT s m) where
+  fmap f m = StateT $ \st -> fmap updater $ runStateT m st
+    where updater ~(x, s) = (f x, s)
+instance Monad m => Applicative (StateT s m) where
+  pure x = StateT $ \ s -> return (x, s)
+  f <*> v = StateT $ \ s -> do
+      ~(g, s') <- runStateT f s
+      ~(x, s'') <- runStateT v s'
+      return (g x, s'')
+instance Monad m => Monad (StateT s m) where
+  fail = lift . fail where lift m = StateT (\st -> (\x -> (x, st)) <$> m) -- solution
+  m >>= k  = StateT $ \s -> do
+    ~(x, s') <- runStateT m s
+    runStateT (k x) s'
+
+-- alternative
+
+fail = StateT . const . fail
+
 ```
 test
 
@@ -1065,24 +1164,24 @@ ghci> runStateT (do { x <- sl3; f <- lift [pred, succ]; return (x, f x)}) 5
   ((7,8),5), -- 5+2 st succ
   ((8,7),10), -- 5+3 st*2 pred
   ((8,9),10)] -- 5+3 st*2 succ
+
 ```
 repl
 
-### 4.2.13 StateT get, put, modify
+### 4.2.13 StateT (get, put, modify)
 
 Реализуем стандартный интерфейс: `get, put, modify`
 ```hs
 -- запаковка переданного снаружи стейта в пару и полиморфную монаду (через конструктор `state`)
-get :: (Monad m) => StateT s m s
+get :: (Monad m)=> StateT s m s
 get = state $ \s -> (s, s) -- вернуть внешний стейт
 
 -- аналогично `get` но внешний стейт игнорится а явно переданный упаковывается
-put :: (Monad m) => s -> StateT s m ()
+put :: (Monad m)=> s -> StateT s m ()
 put s = state $ \_ -> ((), s) -- положить данный стейт
 
--- аналогично, но теперь есть функция преобразования стейта,
--- преобразованный внешний стейт запаковывается
-modify :: (Monad m) => (s -> s) -> StateT s m ()
+-- аналогично, но теперь есть функция преобразования стейта, преобразованный внешний стейт запаковывается
+modify :: (Monad m)=> (s -> s) -> StateT s m ()
 modify f = state $ \s -> ((), f s) -- преобразовать и положить внешний стейт
 
 -- Никакого взаимодействия в внутренней монадой, работаем только со стейтом;
@@ -1095,24 +1194,23 @@ ghci> runStateT (do {sl3; y <- get; put (y - 2); return (2 * y) }) 5
 (10,3),   -- 2*5, 5-2
 (20,8)]   -- 2*10, (5*2)-2
 -- ретурн кладет в первое значение пары `2 * y`
--- где уай это стейт из предыдущего шага пайплайна (get дает нам стейт)
+-- где `y` это стейт из предыдущего шага пайплайна (get дает нам стейт)
 -- в итоге вычисления значений из первого шага просто игнорятся
-
 ```
 repl
 
+### 4.2.14 test
+
 ```hs
-https://stepik.org/lesson/38579/step/14?unit=20504
-TODO
 {--
-Те из вас, кто проходил первую часть нашего курса, конечно же помнят, последнюю задачу из него. 
+Те из вас, кто проходил первую часть нашего курса, конечно же помнят, последнюю задачу из него.
 В тот раз всё закончилось монадой `State`, но сейчас с неё все только начинается!
 
 data Tree a = Leaf a | Fork (Tree a) a (Tree a)
 
-Вам дано значение типа `Tree ()`, иными словами, вам задана форма дерева. 
-От вас требуется сделать две вещи: 
-во-первых, пронумеровать вершины дерева, обойдя их `in-order` обходом (левое поддерево, вершина, правое поддерево); 
+Вам дано значение типа `Tree ()`, иными словами, вам задана форма дерева.
+От вас требуется сделать две вещи:
+во-первых, пронумеровать вершины дерева, обойдя их `in-order` обходом (LNR: левое поддерево, вершина, правое поддерево);
 во-вторых, подсчитать количество листьев в дереве.
 
 GHCi> numberAndCount (Leaf ())
@@ -1120,9 +1218,10 @@ GHCi> numberAndCount (Leaf ())
 GHCi> numberAndCount (Fork (Leaf ()) () (Leaf ()))
 (Fork (Leaf 1) 2 (Leaf 3),2)
 
-Конечно, можно решить две подзадачи по-отдельности, но мы сделаем это всё за один проход. 
-Если бы вы писали решение на императивном языке, вы бы обошли дерево, 
-поддерживая в одной переменной следующий доступный номер для очередной вершины, 
+Конечно, можно решить две подзадачи по-отдельности, но мы сделаем это всё за один проход.
+
+Если бы вы писали решение на императивном языке, вы бы обошли дерево,
+поддерживая в одной переменной следующий доступный номер для очередной вершины,
 а в другой — количество встреченных листьев, причем само значение второй переменной,
 по сути, в процессе обхода не требуется. 
 
@@ -1142,6 +1241,27 @@ go :: Tree () -> StateT Integer (Writer (Sum Integer)) (Tree Integer)
 go = undefined
 
 -- solution
+
+-- Нам надо уметь отделять листы от форков, ибо: количество листов и нумерация нод.
+go :: Tree () -> StateT Integer (Writer (Sum Integer)) (Tree Integer)
+go = traverse_ withState where
+  traverse_ f (Leaf x) = let res = Leaf <$> (f x) in res <* do { lift $ tell (Sum 1) }
+  traverse_ f (Fork l x r) = Fork <$> (traverse_ f l) <*> (f x) <*> (traverse_ f r)
+  withState _ = do          -- _ это юнит, игнорим
+    n <- get                -- взять текущий номер из стейта
+    modify succ             -- следующий номер положить в стейт
+    -- lift $ TW.tell (Sum 1)  -- добавить в лог врайтера 1 (но только если это лист!)
+    return n                -- номер узла
+
+-- alternatives
+
+go (Leaf _)     = lift (tell (Sum 1)) >> Leaf <$> pick
+go (Fork l m r) = Fork <$> go l <*> pick <*> go r
+pick = state ((,) <$> id <*> (+1))
+
+go (Leaf _)            = liftM  Leaf step <* lift (tell $ Sum 1)
+go (Fork left _ right) = liftM3 Fork (go left) step (go right)
+step                   = get <* modify succ
 
 ```
 test
