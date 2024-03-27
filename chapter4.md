@@ -88,6 +88,55 @@ instance (Monad m)=> Applicative (StateT s m) where
       ~(x, s'') <- runStateT v s'
       return (g x, s'')
 
+instance (Monad m)=> Monad (StateT s m) where
+  (>>=) :: StateT s m a -> (a -> StateT s m b) -> StateT s m b
+  m >>= k  = StateT $ \s -> do -- ду-нотация для прохода во внутреннюю монаду
+    ~(x, s') <- runStateT m s -- ленивый пат.мат., левое вычисление
+    runStateT (k x) s' -- правое вычисление
+
+instance MonadTrans (StateT s) where
+  lift :: (Monad m)=> m a -> StateT s m a
+  lift m = StateT $ \st -> do -- залезаем во внутреннюю монаду (лямбда отражает структуру трансформера - стрелка из внешненго стейта)
+    a <- m -- вынимаем значение
+    return (a, st) -- перепаковываем в нужную нам пару
+
+get :: (Monad m)=> StateT s m s
+get = state $ \s -> (s, s) -- вернуть внешний стейт
+
+put :: (Monad m)=> s -> StateT s m ()
+put s = state $ \_ -> ((), s) -- положить данный стейт
+
+modify :: (Monad m)=> (s -> s) -> StateT s m ()
+modify f = state $ \s -> ((), f s) -- преобразовать и положить внешний стейт
+
+-- Except
+
+newtype ExceptT e m a = ExceptT { runExceptT :: m (Either e a) }
+
+except :: (Monad m) => Either e a -> ExceptT e m a
+except = ExceptT . return
+
+instance (Functor m)=> Functor (ExceptT e m) where
+  fmap :: (a -> b) -> ExceptT e m a -> ExceptT e m b
+  fmap f = ExceptT . fmapper . runExceptT where
+    fmapper = fmap (fmap f) -- фмап для ийзер и фмап для абстрактной монады эм (которая также функтор)
+
+instance (Applicative m)=> Applicative (ExceptT e m) where
+  pure = ExceptT . pure . Right -- также, просто упаковка по слоям, пюре это внутренняя абстрактная монада эм
+  f <*> v = ExceptT $ liftA2 updater (runExceptT f) (runExceptT v) where -- n.b. liftA2
+    updater (Left e) _ = Left e
+    updater (Right g) x = fmap g x
+  -- Композиция аппликативных функторов является аппликативным функтором
+  f <*> v = ExceptT $ liftA2 (<*>) (runExceptT f) (runExceptT v) -- вариант с аплайд овер для аппликатива Either
+
+instance (Monad m)=> Monad (ExceptT e m) where
+  fail = ExceptT . fail -- делегируем обработку ошибок во внутренний слой, монаду
+  m >>= k = ExceptT $ do -- залезли во внутреннюю монаду, работаем с Either
+    a <- runExceptT m -- левое вычисление, a :: Either, (runExceptT m) :: Monad Either
+    case a of
+      Left e -> return (Left e) -- запакуем обратно в монаду
+      Right x -> runExceptT (k x) -- аналогично, но наоборот, распакуем в монаду (k x :: ExceptT)
+
 ```
 definitions
 
@@ -1282,6 +1331,7 @@ https://stepik.org/lesson/38580/step/1?unit=20505
 
 Монада Except, с эффектом обработки ошибочных ситуаций (под капотом Either).
 Трансформер для этой монады, соответственно, ExceptT.
+
 Будем реализовывать логику иксепта, навернутого на произвольную монаду.
 Как и ранее, опираясь на ранее рассмотренную логику монады Except
 ```hs
@@ -1317,7 +1367,7 @@ instance Functor (Except e) where -- связали один параметр, �
   fmap f = Except . (fmap f) . runExcept -- тип не стрелочный, лямбд не будет. Будет опора на факт, что Either это функтор.
   -- логика трамвайная: распаковали эйзер, подняли фмапом туда функцию, результат заапаковали обратно в иксепт.
 
-instance (Functor m) => Functor (ExceptT e m) where
+instance (Functor m)=> Functor (ExceptT e m) where
   fmap :: (a -> b) -> ExceptT e m a -> ExceptT e m b
   fmap f = ExceptT . fmapper . runExceptT where fmapper = fmap (fmap f)
   -- фмап для ийзер и фмап для абстрактной монады эм (которая также функтор)
@@ -1350,8 +1400,9 @@ instance Applicative (Except e) where
 -- для аппликатива Either. Поэтому можно сделать так:
   f <*> v = Except $ (runExcept f) <*> (runExcept v) -- вынули Either и сделали "f applied over v"
 
-instance (Applicative m) => Applicative (ExceptT e m) where
+instance (Applicative m)=> Applicative (ExceptT e m) where
   pure = ExceptT . pure . Right -- также, просто упаковка по слоям, пюре это внутренняя абстрактная монада эм
+  -- Не настораживает безусловное применение только одного из двух конструкторов? Правильно настараживает, подробности позже ...
 
   f <*> v = ExceptT $ liftA2 updater (runExceptT f) (runExceptT v) where -- n.b. liftA2
     updater (Left e) _ = Left e
@@ -1387,7 +1438,7 @@ instance Monad (Except e) where
     Left e -> Left e -- пропихиваем ошибку
     Right x -> runExcept (k x) -- ошибки слева нет, запускаем стрелку Клейсли (правое вычисление)
 
-instance (Monad m) => Monad (ExceptT e m) where
+instance (Monad m)=> Monad (ExceptT e m) where
   m >>= k = ExceptT $ do -- залезли во внутреннюю монаду, работаем с Either
     a <- runExceptT m -- левое вычисление, a :: Either, (runExceptT m) :: Monad Either
     case a of
@@ -1405,11 +1456,15 @@ ghci> runExceptT $ do { f <- except $ Right (^2); x <- except $ Right 3; return 
 ```
 repl
 
+### 4.3.6 test
+
 ```hs
-https://stepik.org/lesson/38580/step/6?unit=20505
-TODO
 {--
-Представьте, что друг принес вам игру. В этой игре герой ходит по полю. За один ход он может переместиться на одну клетку вверх, вниз, влево и вправо (стоять на месте нельзя). На поле его поджидают различные опасности, такие как пропасти (chasm) и ядовитые змеи (snake). Если игрок наступает на клетку с пропастью или со змеёй, он умирает.
+Представьте, что друг принес вам игру.
+В этой игре герой ходит по полю.
+За один ход он может переместиться на одну клетку вверх, вниз, влево и вправо (стоять на месте нельзя).
+На поле его поджидают различные опасности, такие как пропасти (chasm) и ядовитые змеи (snake).
+Если игрок наступает на клетку с пропастью или со змеёй, он умирает.
 
 data Tile = Floor | Chasm | Snake
   deriving Show
@@ -1423,13 +1478,13 @@ type Point = (Integer, Integer)
 type GameMap = Point -> Tile
 
 Ваша задача состоит в том, чтобы реализовать функцию
-
 moves :: GameMap -> Int -> Point -> [Either DeathReason Point]
 
-принимающую карту, количество шагов и начальную точку, а возвращающую список всех возможных исходов (с повторениями), если игрок сделает заданное число шагов из заданной точки. 
+принимающую карту, количество шагов и начальную точку,
+а возвращающую список всех возможных исходов (с повторениями),
+если игрок сделает заданное число шагов из заданной точки. 
 
 Заодно реализуйте функцию
-
 waysToDie :: DeathReason -> GameMap -> Int -> Point -> Int
 
 показывающую, сколькими способами игрок может умереть данным способом, сделав заданное число шагов из заданной точки.
@@ -1478,6 +1533,232 @@ waysToDie :: DeathReason -> GameMap -> Int -> Point -> Int
 waysToDie = undefined
 
 -- solution
+
+-- сколько путей умереть данным способом, сделав заданное число шагов из заданной точки.
+waysToDie :: DeathReason -> GameMap -> Int -> Point -> Int
+waysToDie death gmap steps startP = length selected where
+  allDestinations = (moves gmap steps startP)
+  selected = filter (chosen death) allDestinations -- `debug` ("all: " ++ show allDestinations)
+  chosen death d = case d of
+    Right _ -> False
+    Left reason -> reason == death
+
+-- принимающую карту, количество шагов и начальную точку,
+-- а возвращающую список всех возможных исходов (с повторениями),
+-- если игрок сделает заданное число шагов из заданной точки
+moves :: GameMap -> Int -> Point -> [Either DeathReason Point]
+moves gmap steps point = moves_ gmap steps [Right point]
+
+moves_ :: GameMap -> Int -> [Either DeathReason Point] -> [Either DeathReason Point]
+moves_ _ _ [] = []
+moves_ _ 0 eps = eps -- eps: list of Ether (err) Point
+moves_ gmap steps (ep:eps) = oneStep ++ rest where
+  rest = moves_ gmap steps eps
+  oneStep = case ep of
+    Left e -> [ep] -- приехали
+    Right p -> moves_ gmap (steps-1) next4 where
+      next4 = (gamePoint gmap) <$> (fourWays p)
+
+fourWays (x, y) = [p1, p2, p3, p4] where
+  p1 = (x+1, y)
+  p2 = (x-1, y)
+  p3 = (x, y+1)
+  p4 = (x, y-1)
+
+gamePoint :: GameMap -> Point -> Either DeathReason Point
+gamePoint g p = case g p of
+  Floor -> Right p
+  Chasm -> Left Fallen
+  Snake -> Left Poisoned
+
+-- alternatives
+
+move :: Point -> [Point]
+move (x, y) = [(x-1,y), (x+1,y), (x,y-1), (x,y+1)]
+
+moves :: GameMap -> Int -> Point -> [Either DeathReason Point]
+moves m n start | n < 0 = []
+                | n == 0 = [Right start]
+                | otherwise = do
+                      np <- move start
+                      case m np of
+                           Snake -> [Left Poisoned]
+                           Chasm -> [Left Fallen]
+                           _ -> moves m (n-1) np
+
+waysToDie :: DeathReason -> GameMap -> Int -> Point -> Int
+waysToDie r m n start = length . filter (==r) . lefts $ moves m n start
+
+--------------------------------------------------------------------------------
+
+import qualified Control.Monad.Except as E
+import           Control.Monad.Trans
+
+moves :: GameMap -> Int -> Point -> [Either DeathReason Point]
+moves game = (E.runExceptT .).  go  where
+  go 0 p = verify p
+  go k p = steps p >>= go (k - 1)
+  verify::Point->E.ExceptT DeathReason [] Point
+  verify p = case game p of
+    Floor -> return p
+    Chasm -> E.throwError Fallen
+    Snake -> E.throwError Poisoned
+  neighbor (x, y) = [(x+1, y), (x-1, y), (x, y+1), (x, y-1)]
+  steps p = verify p >> lift (neighbor p)
+
+waysToDie :: DeathReason -> GameMap -> Int -> Point -> Int
+waysToDie r = (((length . filter (== Left r)).).). moves
+
+--------------------------------------------------------------------------------
+
+throwE = ExceptT . return . Left
+lift = ExceptT . fmap Right
+
+moves :: GameMap -> Int -> Point -> [Either DeathReason Point]
+moves mp n ini = runExceptT allSteps where
+  allSteps =  foldl (>>=) (ExceptT [Right ini]) $ replicate n doStep
+  doStep x = do
+    x' <- lift $ possibleSteps x
+    case (mp x') of
+      Snake -> throwE Poisoned
+      Chasm -> throwE Fallen
+      Floor -> return x'
+  possibleSteps (a, b) = [(a, b - 1), (a, b + 1), (a - 1, b), (a + 1, b)]
+
+waysToDie :: DeathReason -> GameMap -> Int -> Point -> Int
+waysToDie reason mp n ini = length $ filter (== Left reason) $ moves mp n ini
+
+-----------------------------------------------------------------------------------
+
+throwE' = ExceptT . return . Left
+
+nexts :: Point -> [Point]
+nexts (x, y) = [(x - 1, y), (x, y - 1), (x + 1, y), (x, y + 1)]
+
+moves :: GameMap -> Int -> Point -> [Either DeathReason Point]
+moves m n = runExceptT . moves' m n
+
+moves' :: GameMap -> Int -> Point -> ExceptT DeathReason [] Point
+moves' m n p = case m p of
+    Chasm -> throwE' Fallen
+    Snake -> throwE' Poisoned
+    _ -> if n == 0 then return p else ExceptT $ moves m (n - 1) `concatMap` nexts p
+
+waysToDie :: DeathReason -> GameMap -> Int -> Point -> Int
+waysToDie d m n = length . filter (== Left d) . moves m n
+
+-------------------------------------------------------------------------------------
+
+throwE = ExceptT . return . Left
+lift = ExceptT . fmap Right
+
+moves :: GameMap -> Int -> Point -> [Either DeathReason Point]
+moves m n ini = runExceptT $ iterate move (return ini) !! n
+  where
+    move :: ExceptT DeathReason [] Point -> ExceptT DeathReason [] Point
+    move p = do
+      (x, y) <- p
+      p' <- lift [(x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)]
+      case m p' of
+        Chasm -> throwE Fallen
+        Snake -> throwE Poisoned
+        Floor -> return p'
+
+waysToDie :: DeathReason -> GameMap -> Int -> Point -> Int
+waysToDie dr = (((length . filter (Left dr ==)) .).) . moves
+
+----------------------------------------------------------------------------------
+
+movesFrom :: Point -> [Point]
+movesFrom (x, y) = [(x-1, y), (x+1, y), (x, y-1), (x, y+1)]
+
+moves :: GameMap -> Int -> Point -> [Either DeathReason Point]
+moves m n p = case m p of
+  Floor -> if n > 0 then concatMap (moves m (n-1)) (movesFrom p) else [Right p]
+  Chasm -> [Left Fallen]
+  Snake -> [Left Poisoned]
+
+waysToDie :: DeathReason -> GameMap -> Int -> Point -> Int
+waysToDie r m n p = length $ filter (either (==r) (const False)) $ moves m n p
+
+----------------------------------------------------------------------------------
+
+moves :: GameMap -> Int -> Point -> [Either DeathReason Point]
+moves m n p = runExceptT $ moves' n p where
+    moves' 0 p = ExceptT $ [Right p]
+    moves' n p = do
+        (x,y) <- moves' (n-1) p
+        p' <- ExceptT $ fmap Right [(x+1,y), (x-1,y), (x,y+1), (x,y-1)]
+        case m p' of
+            Floor -> return p'
+            Chasm -> ExceptT $ [Left Fallen]
+            Snake -> ExceptT $ [Left Poisoned]
+
+waysToDie :: DeathReason -> GameMap -> Int -> Point -> Int
+waysToDie d m n p = length $ filter (== Left d) $ moves m n p
+
+---------------------------------------------------------------------------------
+
+result :: GameMap -> Point -> ExceptT DeathReason [] Point
+result gm p = case gm p of
+  Floor -> ExceptT [Right p]
+  Chasm -> ExceptT [Left Fallen]
+  Snake -> ExceptT [Left Poisoned]
+  
+neighbors :: Point -> ExceptT DeathReason [] Point
+neighbors (x,y) = ExceptT $ map Right [(x,y-1), (x,y+1), (x-1,y), (x+1,y)]
+
+moves :: GameMap -> Int -> Point -> [Either DeathReason Point]
+moves gm n p = runExceptT $ (foldr (\f g x -> f x >>= g) return $ take n $ repeat fun) p where
+  fun p1 = neighbors p1 >>= result gm
+
+waysToDie :: DeathReason -> GameMap -> Int -> Point -> Int
+waysToDie dr gm n p = length $ filter (Left dr ==) $ moves gm n p
+
+-----------------------------------------------------------------------------------
+
+import Control.Monad.Trans.Class
+
+moves :: GameMap -> Int -> Point -> [Either DeathReason Point]
+moves m n p = runExceptT $ move n p
+  where
+    move 0 p = pure p
+    move i (x, y) = do
+      p' <- lift $ do
+        dx <- [-1, 0, 1]
+        dy <- [-1, 0, 1]
+        guard $ abs dx /= abs dy
+        pure (x+dx, y+dy)
+      case m p' of
+        Snake -> throwE Poisoned
+        Chasm -> throwE Fallen
+        Floor -> move (i-1) p'
+
+instance MonadTrans (ExceptT e) where
+  lift m = ExceptT $ do
+    a <- m
+    pure $ pure a
+
+throwE :: Monad m => e -> ExceptT e m a
+throwE = ExceptT . pure . Left
+
+waysToDie :: DeathReason -> GameMap -> Int -> Point -> Int
+waysToDie r m i p = length . filter (== Left r) $ moves m i p
+
+-----------------------------------------------------------------------
+
+moves :: GameMap -> Int -> Point -> [Either DeathReason Point]
+moves _ n _ | n < 0 = []
+moves _ 0 p = [Right p]
+moves fp n (x, y) = do 
+    p <- [(x+1, y), (x-1, y), (x, y+1), (x, y-1)]
+    case fp p of
+        Chasm -> [Left Fallen]
+        Snake -> [Left Poisoned]
+        Floor -> moves fp (n-1) p
+   
+waysToDie :: DeathReason -> GameMap -> Int -> Point -> Int
+waysToDie r = (((length . filter (Left r ==)) . ) . ) . moves
 
 ```
 test

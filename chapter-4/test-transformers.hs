@@ -73,8 +73,11 @@ import Prelude (
     foldr, foldl, Either(..), Monoid(..), Semigroup(..), putStrLn, print, (*), (>), (/), (^),
     map, (=<<), (>>=), return, flip, (++), fail, Ord(..), (>>), take, Monad(..),
     Double, either, Integer, head, tail, IO(..), snd, pi, fromIntegral,
-    repeat, fst, snd,
+    repeat, fst, snd, (&&), filter, Bool(..),
     )
+
+import Debug.Trace ( trace, )
+debug = flip trace
 
 -- newtype Writer w a = Writer { runWriter :: (a, w) } -- было
 newtype WriterT w m a = WriterT { runWriterT :: m (a, w) } -- будем реализовывать
@@ -841,3 +844,171 @@ instance Traversable Tree where
   traverse g (Leaf x) = Leaf <$> (g x)
   traverse g (Fork l x r) = Fork <$> (traverse g l) <*> (g x) <*> (traverse g r)
 -- foo tree = traverse (const $ TS.modify succ >> TS.get) tree
+
+
+{--
+Представьте, что друг принес вам игру.
+В этой игре герой ходит по полю.
+За один ход он может переместиться на одну клетку вверх, вниз, влево и вправо (стоять на месте нельзя).
+На поле его поджидают различные опасности, такие как пропасти (chasm) и ядовитые змеи (snake).
+Если игрок наступает на клетку с пропастью или со змеёй, он умирает.
+
+data Tile = Floor | Chasm | Snake
+  deriving Show
+
+data DeathReason = Fallen | Poisoned
+  deriving (Eq, Show)
+
+Карта задается функцией, отображающей координаты клетки в тип этой самой клетки:
+
+type Point = (Integer, Integer)
+type GameMap = Point -> Tile
+
+Ваша задача состоит в том, чтобы реализовать функцию
+moves :: GameMap -> Int -> Point -> [Either DeathReason Point]
+
+принимающую карту, количество шагов и начальную точку,
+а возвращающую список всех возможных исходов (с повторениями),
+если игрок сделает заданное число шагов из заданной точки. 
+
+Заодно реализуйте функцию
+waysToDie :: DeathReason -> GameMap -> Int -> Point -> Int
+
+показывающую, сколькими способами игрок может умереть данным способом, сделав заданное число шагов из заданной точки.
+
+Например, для такого поля:
+
+поле в виде рисунка:
+ | 0 1 2 3 4 5
+--------------
+0| o o o o o o
+1| o       s o
+2| o   s     o
+3| o         o
+4| o         o
+5| o o o o o o
+закодировано как:
+
+map1 :: GameMap
+map1 (2, 2) = Snake
+map1 (4, 1) = Snake
+map1 (x, y)
+  | 0 < x && x < 5 && 0 < y && y < 5 = Floor
+  | otherwise                        = Chasm
+
+ожидаются такие ответы:
+
+GHCi> waysToDie Poisoned map1 1 (4,2)
+1  -- можно пойти к змее наверх
+GHCi> waysToDie Poisoned map1 2 (4,2)
+2  -- можно пойти к змее наверх или к змее влево
+GHCi> waysToDie Poisoned map1 3 (4,2)
+5  -- за три шага к левой змее, по-прежнему можно дойти одним способом,
+   -- а к правой — уже четырьмя (вверх, влево-вверх-вправо,
+   --                            влево-вправо-вверх, вниз-вверх-вверх)
+GHCi> waysToDie Poisoned map1 4 (4,2)
+13
+
+Гарантируется, что изначально игрок стоит на пустой клетке.
+
+Подсказка: не забывайте, в каком уроке эта задача.
+--}
+
+-- сколько путей умереть данным способом, сделав заданное число шагов из заданной точки.
+waysToDie :: DeathReason -> GameMap -> Int -> Point -> Int
+waysToDie death gmap steps startP = length selected where
+  allDestinations = (moves gmap steps startP)
+  selected = filter (chosen death) allDestinations -- `debug` ("all: " ++ show allDestinations)
+  chosen death d = case d of
+    Right _ -> False
+    Left reason -> reason == death
+
+-- принимающую карту, количество шагов и начальную точку,
+-- а возвращающую список всех возможных исходов (с повторениями),
+-- если игрок сделает заданное число шагов из заданной точки
+moves :: GameMap -> Int -> Point -> [Either DeathReason Point]
+moves gmap steps point = moves_ gmap steps [Right point]
+
+moves_ :: GameMap -> Int -> [Either DeathReason Point] -> [Either DeathReason Point]
+moves_ _ _ [] = []
+moves_ _ 0 eps = eps -- eps: list of Ether (err) Point
+moves_ gmap steps (ep:eps) = oneStep ++ rest where
+  rest = moves_ gmap steps eps
+  oneStep = case ep of
+    Left e -> [ep]
+    Right p -> moves_ gmap (steps-1) next4 where
+      next4 = (gamePoint gmap) <$> (fourWays p)
+
+fourWays (x, y) = [p1, p2, p3, p4] where
+  p1 = (x+1, y)
+  p2 = (x-1, y)
+  p3 = (x, y+1)
+  p4 = (x, y-1)
+
+gamePoint :: GameMap -> Point -> Either DeathReason Point
+gamePoint g p = case g p of
+  Floor -> Right p
+  Chasm -> Left Fallen
+  Snake -> Left Poisoned
+
+{--
+Есть кол-во шагов,
+На каждом шаге текущая точка меняет х или у на 1 или -1, т.е. 4 варианта новой точки на каждом шаге,
+Умерев на точке пэ, дальше из этой точки не двигаемся,
+Нужно получить список всех конечных состояний после эн шагов.
+Значит, промежуточные удачные точки мы не записываем, только держим дерево конечных состояний.
+
+> move должна возвращать только исходы, то есть на какой клетке вы остановитесь после последнего хода
+ключевое слово "исходов"
+--}
+
+-- end of solution
+
+data Tile = Floor | Chasm | Snake deriving Show
+data DeathReason = Fallen | Poisoned deriving (Eq, Show)
+-- Карта задается функцией, отображающей координаты клетки в тип этой самой клетки:
+type Point = (Integer, Integer)
+type GameMap = Point -> Tile
+
+map1 :: GameMap
+map1 (2, 2) = Snake
+map1 (4, 1) = Snake
+map1 (x, y)
+  | 0 < x && x < 5 && 0 < y && y < 5 = Floor
+  | otherwise                        = Chasm
+
+test23 = waysToDie Poisoned map1 1 (4,2) -- 1  -- можно пойти к змее наверх
+test22 = waysToDie Poisoned map1 2 (4,2) -- 2  -- можно пойти к змее наверх или к змее влево
+test21 = waysToDie Poisoned map1 3 (4,2) -- 5  -- за три шага к левой змее, по-прежнему можно дойти одним способом,
+   -- а к правой — уже четырьмя (вверх, влево-вверх-вправо,
+   --                            влево-вправо-вверх, вниз-вверх-вверх)
+test20 = waysToDie Poisoned map1 4 (4,2) -- 13
+
+{--
+wrong:
+moves gmap steps (x, y) = list where
+  list = (moves_ gmap steps p1) 
+      ++ (moves_ gmap steps p2) 
+      ++ (moves_ gmap steps p3) 
+      ++ (moves_ gmap steps p4)
+  p1 = (x+1, y)
+  p2 = (x-1, y)
+  p3 = (x, y+1)
+  p4 = (x, y-1)
+
+moves_ :: GameMap -> Int -> Point -> [Either DeathReason Point]
+moves_ _ 0 _ = []
+moves_ gmap steps p = case gamePoint gmap p of
+  Left d -> [Left d] -- stop here
+  Right _ -> (Right p) : ( (moves_ gmap (steps-1) p1)
+                        ++ (moves_ gmap (steps-1) p2)
+                        ++ (moves_ gmap (steps-1) p3)
+                        ++ (moves_ gmap (steps-1) p4)
+    ) where
+      (x, y) = p
+      p1 = (x+1, y)
+      p2 = (x-1, y)
+      p3 = (x, y+1)
+      p4 = (x, y-1)
+
+--}
