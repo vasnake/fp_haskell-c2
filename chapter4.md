@@ -137,6 +137,20 @@ instance (Monad m)=> Monad (ExceptT e m) where
       Left e -> return (Left e) -- запакуем обратно в монаду
       Right x -> runExceptT (k x) -- аналогично, но наоборот, распакуем в монаду (k x :: ExceptT)
 
+instance MonadTrans (ExceptT e) where
+  lift :: m a -> ExceptT e m a
+  lift = ExceptT . (fmap Right) -- поднимаем конструктор Either в монаду m
+
+throwE :: (Monad m)=> e -> ExceptT e m a
+throwE = ExceptT . return . Left -- последовательное заворачивание ошибки в слои оберток
+
+catchE :: (Monad m)=> ExceptT e m a -> (e -> ExceptT e2 m a) -> ExceptT e2 m a
+m `catchE` h = ExceptT $ do -- ошибка и функция обработки ошибки (handler), уходим в монаду
+  a <- runExceptT m -- вынимаем из монады значение Either
+  case a of
+    Left  e -> runExceptT (h e) -- вынимаем монаду с обработанной ошибкой
+    Right v -> return (Right v) -- упаковываем в монаду правильный результат
+
 ```
 definitions
 
@@ -1533,6 +1547,9 @@ waysToDie :: DeathReason -> GameMap -> Int -> Point -> Int
 waysToDie = undefined
 
 -- solution
+Подсказка (видимо) говорит о том, что трансформер ExceptT над монадой списка, это (под капотом)
+список Either-ов, что и требуется на выходе moves.
+Т.е. работу можно выполнить в монаде трансформера, что по факту будет в монаде списка.
 
 -- сколько путей умереть данным способом, сделав заданное число шагов из заданной точки.
 waysToDie :: DeathReason -> GameMap -> Int -> Point -> Int
@@ -1573,81 +1590,91 @@ gamePoint g p = case g p of
 
 -- alternatives
 
-move :: Point -> [Point]
-move (x, y) = [(x-1,y), (x+1,y), (x,y-1), (x,y+1)]
-
-moves :: GameMap -> Int -> Point -> [Either DeathReason Point]
-moves m n start | n < 0 = []
-                | n == 0 = [Right start]
-                | otherwise = do
-                      np <- move start
-                      case m np of
-                           Snake -> [Left Poisoned]
-                           Chasm -> [Left Fallen]
-                           _ -> moves m (n-1) np
-
-waysToDie :: DeathReason -> GameMap -> Int -> Point -> Int
-waysToDie r m n start = length . filter (==r) . lefts $ moves m n start
-
---------------------------------------------------------------------------------
-
+-- предполагаемый способ? через трансформер ExceptT над списком?
+-- Я разобрал как это работает, всё понятно. Но я даже повторить это не смогу, у меня мозги по другому работают :(
 import qualified Control.Monad.Except as E
 import           Control.Monad.Trans
-
 moves :: GameMap -> Int -> Point -> [Either DeathReason Point]
-moves game = (E.runExceptT .).  go  where
-  go 0 p = verify p
-  go k p = steps p >>= go (k - 1)
-  verify::Point->E.ExceptT DeathReason [] Point
-  verify p = case game p of
-    Floor -> return p
-    Chasm -> E.throwError Fallen
+moves game = (E.runExceptT . ) .  go  where
+
+  go 0 p = verify p -- go nSteps, point: обработка последней точки
+  go k p = steps p >>= go (k - 1) -- пайплайн: одна-пойнт и следом остаток шагов (где спрятаны следующие точки?)
+  -- в левой части формируется список 4 точек (или сушняк-смерть), в правой части запускается обработка,
+  -- фактически это итератор на рекурсии
+
+  steps p = verify p >> lift (neighbors p) -- отбрасывает значение левого и поднимает в трансформер список 4 следующих точек
+  -- левая часть нужна чтобы "засушить" умершие ветки
+
+  verify :: Point -> E.ExceptT DeathReason [] Point -- под капотом список изеров, что и требуется
+  verify p = case game p of -- в монаде трансформера иксепт-над-списком, внутри это список изеров
+    Floor -> return p -- пойнт завернутый в монаду-трансформер, выйдет список одного элемента
+    Chasm -> E.throwError Fallen -- засушили ветку, вычисления в монаде далее не пойдут
     Snake -> E.throwError Poisoned
-  neighbor (x, y) = [(x+1, y), (x-1, y), (x, y+1), (x, y-1)]
-  steps p = verify p >> lift (neighbor p)
+
+  neighbors (x, y) = [(x+1, y), (x-1, y), (x, y+1), (x, y-1)]
 
 waysToDie :: DeathReason -> GameMap -> Int -> Point -> Int
 waysToDie r = (((length . filter (== Left r)).).). moves
 
 --------------------------------------------------------------------------------
 
-throwE = ExceptT . return . Left
-lift = ExceptT . fmap Right
-
 moves :: GameMap -> Int -> Point -> [Either DeathReason Point]
-moves mp n ini = runExceptT allSteps where
-  allSteps =  foldl (>>=) (ExceptT [Right ini]) $ replicate n doStep
-  doStep x = do
-    x' <- lift $ possibleSteps x
-    case (mp x') of
-      Snake -> throwE Poisoned
-      Chasm -> throwE Fallen
-      Floor -> return x'
-  possibleSteps (a, b) = [(a, b - 1), (a, b + 1), (a - 1, b), (a + 1, b)]
-
-waysToDie :: DeathReason -> GameMap -> Int -> Point -> Int
-waysToDie reason mp n ini = length $ filter (== Left reason) $ moves mp n ini
-
------------------------------------------------------------------------------------
-
-throwE' = ExceptT . return . Left
+moves m n = runExceptT . (moves' m n)
+-- вычисление трансформера иксептТ (список изеров), простая рекурсия
+moves' :: GameMap -> Int -> Point -> ExceptT DeathReason [] Point
+moves' m n p = case m p of -- тре кейса, три конструктора иксептТ
+    Chasm -> throwE Fallen
+    Snake -> throwE Poisoned
+    Floor -> if n == 0 then return p 
+      else ExceptT ( -- конструктор желаемого трансформера, внутри рекурсивный вызов
+        moves m (n - 1) `concatMap` nexts p
+      ) -- маппит функцию point -> [either] на список 4 точек
 
 nexts :: Point -> [Point]
 nexts (x, y) = [(x - 1, y), (x, y - 1), (x + 1, y), (x, y + 1)]
-
-moves :: GameMap -> Int -> Point -> [Either DeathReason Point]
-moves m n = runExceptT . moves' m n
-
-moves' :: GameMap -> Int -> Point -> ExceptT DeathReason [] Point
-moves' m n p = case m p of
-    Chasm -> throwE' Fallen
-    Snake -> throwE' Poisoned
-    _ -> if n == 0 then return p else ExceptT $ moves m (n - 1) `concatMap` nexts p
 
 waysToDie :: DeathReason -> GameMap -> Int -> Point -> Int
 waysToDie d m n = length . filter (== Left d) . moves m n
 
 -------------------------------------------------------------------------------------
+
+moves :: GameMap -> Int -> Point -> [Either DeathReason Point]
+moves m n start | n < 0 = []
+                | n == 0 = [Right start] -- possible bug, should be mapping Point -> Either
+                | otherwise = do -- list monad
+                      np <- move start -- NextPoint iteration
+                      case m np of
+                           Snake -> [Left Poisoned] -- stop here
+                           Chasm -> [Left Fallen]
+                           Floor -> moves m (n-1) np -- next move, recursion
+
+waysToDie :: DeathReason -> GameMap -> Int -> Point -> Int
+waysToDie r m n start = (length . filter (== r) . lefts) (moves m n start)
+-- lefts :: [Either a b] -> [a] -- base Data.Either -- Extracts from a list of Either all the Left elements
+
+move :: Point -> [Point] -- produce next 4 points
+move (x, y) = [(x-1,y), (x+1,y), (x,y-1), (x,y+1)]
+
+--------------------------------------------------------------------------------
+
+moves :: GameMap -> Int -> Point -> [Either DeathReason Point]
+moves mp n ini = runExceptT allSteps where
+  -- создание цепочки из nSteps вычислений в монаде иксептТ (список изеров),
+  -- где в левой части формируется список точек для обработки правой частью
+  allSteps = foldl (>>=) (ExceptT [Right ini]) (replicate n doStep)
+  doStep p = do -- монада трансформера иксептТ, посчитает результат для 4 соседей точки
+    np <- lift $ nextStepPoints p -- перебор точек из списка
+    case (mp np) of
+      Snake -> throwE Poisoned -- засушили
+      Chasm -> throwE Fallen
+      Floor -> return np -- список одной точки (тут можно было бы сделать рекурсию)
+
+  nextStepPoints (a, b) = [(a, b - 1), (a, b + 1), (a - 1, b), (a + 1, b)]
+
+waysToDie :: DeathReason -> GameMap -> Int -> Point -> Int
+waysToDie reason mp n ini = length $ filter (== Left reason) $ moves mp n ini
+
+-----------------------------------------------------------------------------------
 
 throwE = ExceptT . return . Left
 lift = ExceptT . fmap Right
@@ -1771,22 +1798,22 @@ instance MonadTrans (ExceptT e) where
   lift :: m a -> ExceptT e m a
   lift = ExceptT . (fmap Right) -- поднимаем конструктор Either в монаду m
 
-throwE :: (Monad m) => e -> ExceptT e m a
+throwE :: (Monad m)=> e -> ExceptT e m a
 throwE = ExceptT . return . Left -- последовательное заворачивание ошибки в слои оберток
 
-catchE :: (Monad m) => ExceptT e m a -> (e -> ExceptT e2 m a) -> ExceptT e2 m a
+catchE :: (Monad m)=> ExceptT e m a -> (e -> ExceptT e2 m a) -> ExceptT e2 m a
 m `catchE` h = ExceptT $ do -- ошибка и функция обработки ошибки (handler), уходим в монаду
   a <- runExceptT m -- вынимаем из монады значение Either
   case a of
-    Left  l -> runExceptT (h l) -- вынимаем монаду с обработанной ошибкой
-    Right r -> return (Right r) -- упаковываем в монаду правильный результат
+    Left  e -> runExceptT (h e) -- вынимаем монаду с обработанной ошибкой
+    Right v -> return (Right v) -- упаковываем в монаду правильный результат
 
 ```
 repl
 
+### 4.3.8 test
+
 ```hs
-https://stepik.org/lesson/38580/step/8?unit=20505
-TODO
 {--
 Следующий код
 
@@ -1810,17 +1837,17 @@ isValid0 s = length s >= 8
             && any isNumber s
             && any isPunctuation s
 
-используя трансформер `MaybeT` и свойства функции `msum`, 
-отвергает ввод пользовательского пароля, до тех пор пока он не станет удовлетворять заданным критериям. 
-Это можно проверить, вызывая его в интерпретаторе
+используя трансформер `MaybeT` и свойства функции `msum`,
+отвергает ввод пользовательского пароля, до тех пор пока он не станет удовлетворять заданным критериям.
 
+Это можно проверить, вызывая его в интерпретаторе
 GHCi> runMaybeT askPassword0
 
-Используя пользовательский тип ошибки и трансформер `ExceptT` вместо `MaybeT`, 
-модифицируйте приведенный выше код так, чтобы он выдавал пользователю сообщение о причине, по которой пароль отвергнут.
+Используя пользовательский тип ошибки и трансформер `ExceptT` вместо `MaybeT`,
+модифицируйте приведенный выше код так, чтобы он
+выдавал пользователю сообщение о причине, по которой пароль отвергнут.
 
 data PwdError = PwdError String
-
 type PwdErrorIOMonad = ExceptT PwdError IO
 
 askPassword :: PwdErrorIOMonad ()
@@ -1828,7 +1855,7 @@ askPassword = do
   liftIO $ putStrLn "Enter your new password:"
   value <- msum $ repeat getValidPassword
   liftIO $ putStrLn "Storing in database..."
-  
+
 getValidPassword :: PwdErrorIOMonad String
 getValidPassword = undefined
 
@@ -1868,16 +1895,92 @@ getValidPassword = undefined
 
 -- solution
 
+import Control.Monad.Trans.Except
+import Control.Monad.IO.Class (liftIO)
+import Data.Foldable (msum)
+import Data.Char (isNumber, isPunctuation)
+import Data.Either ( lefts, isLeft, )
+import Control.Monad ( liftM, mplus, when, )
+getValidPassword :: PwdErrorIOMonad String -- TE.ExceptT PwdError IO String -- PwdError = String
+-- т.е. имеем ио монаду в которой изер: ошибка=строка, значение=строка
+getValidPassword = do
+  s <- liftIO getLine
+  let errOrpass = check s
+  when (isLeft errOrpass) (runError errOrpass)
+  return s
+-- runError :: (MonadIO m)=> Either PwdError a -> TE.ExceptT PwdError m b
+runError (Right _) = undefined
+runError (Left (PwdError msg)) = do
+  liftIO (putStrLn $ "Incorrect input: " ++ msg)
+  throwE (PwdError msg)
+-- check :: String -> Either PwdError String
+check s
+  | length s < 8              = Left $ PwdError "password is too short!"
+  | not (any isNumber s)      = Left $ PwdError "password must contain some digits!"
+  | not (any isPunctuation s) = Left $ PwdError "password must contain some punctuation!"
+  | otherwise                 = Right s
+instance Monoid PwdError where mempty = PwdError mempty; (PwdError x) `mappend` (PwdError y) = PwdError $ x ++ y
+
+-- alternatives
+
+getValidPassword = check `catchE` handleError where -- ожидаемое решение, throw/catch
+  check = do
+    s <- liftIO getLine
+    isValid s
+    return s
+  handleError (PwdError e) = do 
+    liftIO $ putStrLn ("Incorrect input: " ++ e)
+    throwE $ PwdError e
+instance Monoid PwdError where  mempty = PwdError "";   (PwdError e1) `mappend` (PwdError e2) = PwdError (e1 ++ e2)
+isValid :: String -> PwdErrorIOMonad ()
+isValid s
+  | length s < 8              = throwE $ PwdError "password is too short!"
+  | not $ any isNumber s      = throwE $ PwdError "password must contain some digits!" 
+  | not $ any isPunctuation s = throwE $ PwdError "password must contain some punctuation!" 
+  | otherwise                 = return ()
+
+getValidPassword = do
+  s <- liftIO getLine
+  either ((>>) <$> liftIO . putStrLn <*> (throwE . PwdError)) (return $ validatePass s)
+validatePass :: String -> Either String String
+validatePass s = left ("Incorrect input: " ++) $ do
+  unless (length s >= 8)       $ Left "password is too short!"
+  unless (any isNumber s)      $ Left "password must contain some digits!"
+  unless (any isPunctuation s) $ Left "password must contain some punctuation!"
+  return s
+
+getValidPassword = do
+    s <- liftIO getLine
+    unless (length s >= 8) (showE "Incorrect input: password is too short!")
+    unless (any isNumber s) (showE "Incorrect input: password must contain some digits!")
+    unless (any isPunctuation s) (showE "Incorrect input: password must contain some punctuation!")
+    return s
+  where showE s = do
+          liftIO $ putStrLn s
+          throwE (PwdError s)
+instance Monoid PwdError where   mempty  = undefined;   mappend = undefined
+
+instance Monoid PwdError where  mempty = PwdError "";   mappend (PwdError a) (PwdError b) = PwdError $ a ++ b
+getValidPassword = do
+  s <- liftIO getLine
+  catchE (validate s) (\(PwdError a) -> do liftIO $ putStrLn a; throwE $ PwdError a)
+validate :: String -> PwdErrorIOMonad String
+validate s = do
+  when (length s < 8) $ throwE $ PwdError "Incorrect input: password is too short!"
+  when (not $ any isNumber s) $ throwE $ PwdError "Incorrect input: password must contain some digits!"
+  when (not $ any isPunctuation s) $ throwE $ PwdError "Incorrect input: password must contain some punctuation!"
+  return s
+
 ```
 test
 
-### 4.3.9 тестируем реализацию
+### 4.3.9 тестируем реализацию (демо неудачной реализации аппликатива)
 
 Поиграем с трансформерами, завернем в ExceptT монаду State,
 которая, в свою очередь сделана через трансформер StateT накрученный на Identity
 ```hs
 import Control.Monad.Identity
-test :: (Num s) => ExceptT e (StateT s Identity) a -> (Either e a, s)
+test :: (Num s)=> ExceptT e (StateT s Identity) a -> (Either e a, s)
 test f = runIdentity (runStateT (runExceptT f) 3)
 -- 3 это начальный стейт
 -- f это монада ExceptT, переданная снаружи
@@ -1887,7 +1990,7 @@ test f = runIdentity (runStateT (runExceptT f) 3)
 
 -- (except $ Right 42) >> lift (put 5)
 ghci> :t (except $ Right 42) >> (lift $ put 5)
-  :: (Monad m, Num s) => ExceptT e (StateT s m) () -- т.е. это внутри это так: m e a = State Either s = (Either e a, s)
+  :: (Monad m, Num s)=> ExceptT e (StateT s m) () -- т.е. внутри это так: m e a = State Either s = (Either e a, s)
 -- подготовка: тестовая монада иксепт, получена "правым" байндом монады `Right 42` в конструкторе иксепта, монада не указана,
 -- и монады `lift (put 5)` полученной лифтом монады стейта (пут) в монаду иксептТ
 -- не определены: тип ошибки и конкретизация монады внутри стейтТ
@@ -1903,8 +2006,8 @@ ghci> test $ (except $ Right 42) >> (lift $ modify (+1))
 (Right (),4) -- старый стейт 3 стал 4
 
 ghci> test $ throwE "foo" >> (lift $ modify (+1))
-(Left "foo",3) -- ошибка в левой части байнд была прокинута далее без изменений, ни лог ни значение
--- правой стрелкой не поменялись
+(Left "foo",3) -- ошибка в левой части байнд была прокинута далее без изменений, 
+-- ни лог ни значение правой стрелкой не поменялись
 
 ghci> test $ lift (modify (+2)) >> throwE "foo" >> (lift $ modify (+1))
 (Left "foo",5) -- до ошибки вычисления происходят и сохраняются в стейте
@@ -1935,7 +2038,7 @@ instance Monad m => Applicative (StateT s m) where
 ```
 repl
 
-### 4.3.10 корректный Applicative ExceptT
+### 4.3.10 корректный Applicative ExceptT (без liftA2)
 
 Аппликатив построен так, чтобы эффекты не зависили от значения,
 цепочка вычислений в аппликативе тупо накапливает эффекты.
@@ -1947,7 +2050,8 @@ repl
 
 Это противоречит семантике `Except`: при возникновении ошибки цепочка прерывается и дальше идет ошибка.
 
-Поэтому надо потребовать, чтобы внутренний слой в аппликативе `ExceptT` был монадой, тогда мы можем повлиять на эффекты.
+Поэтому надо потребовать, чтобы внутренний слой в аппликативе `ExceptT` был монадой,
+тогда мы можем повлиять на эффекты.
 ```hs
 -- предыдущая некорректная реализация: композиция аппликативов, противоречит семантике
 instance (Applicative m) => Applicative (ExceptT e m) where
@@ -1955,7 +2059,7 @@ instance (Applicative m) => Applicative (ExceptT e m) where
   f <*> v = ExceptT $ liftA2 <*> (runExceptT f) (runExceptT v) 
 
 -- реализация завязанная на монаду внутреннего слоя, поведение соответствует семантике
-instance (Monad m) => Applicative (ExceptT e m) where
+instance (Monad m)=> Applicative (ExceptT e m) where
   pure x = ExceptT $ pure (Right x)
   (ExceptT mef) <*> (ExceptT mea) = ExceptT $ do -- залезли в монаду нижнего слоя
     ef <- mef -- из монады в которой лежит `Either e f` вынимаем этот ийзер
@@ -1970,7 +2074,7 @@ ghci> :t test
 test :: Num s => ExceptT e (StateT s Identity) a -> (Either e a, s)
 
 ghci> test $ lift (modify (+2)) >> throwE "foo" >> (lift $ modify (+1))
-(Left "foo",5) -- корректный результат, после ошибки ничего не делали
+(Left "foo",5) -- корректный результат, после ошибки ничего не делали со стейтом
 
 -- предыдущая реализация аппликатива через композицию аппликативов,
 -- не очень хорошая, смотрите:
@@ -1982,6 +2086,8 @@ ghci> test $ lift (modify (+2)) *> throwE "foo" *> (lift $ modify (+1))
 
 ```
 repl
+
+### 4.3.11 test
 
 ```hs
 {--
@@ -2004,11 +2110,11 @@ Select all correct options from the list
 - MaybeT -- более бледная версия Either, рассуждения такие же как про ExceptT
 
 - StateT -- на лекциях рассматривали, но почему внутренний слой должен быть монадой:
--- врде потому, что сложная внутренняя структура `s -> (a, s)` не доступна внутри аппликатива?
+-- вроде потому, что сложная внутренняя структура `s -> (a, s)` не доступна внутри аппликатива?
 -- Или потому, что семантика требует прокидывания стейта, полученного (измененного) левым вычислением,
 -- в правое вычисление? В аппликативе такое не возможно по определению. Думаю да, такой ответ правильный.
 
-instance (Monad m) => Applicative (StateT s m) where
+instance (Monad m)=> Applicative (StateT s m) where
   pure :: a -> StateT s m a
   pure x = StateT $ \s -> return (x, s)
 
@@ -2021,9 +2127,9 @@ instance (Monad m) => Applicative (StateT s m) where
 ```
 test
 
+### 4.3.12 test
+
 ```hs
-https://stepik.org/lesson/38580/step/12?unit=20505
-TODO
 {--
 Вспомним функцию `tryRead`:
 
@@ -2041,19 +2147,53 @@ tryRead = undefined
 -- > Вспомним функцию tryRead
 -- Из задачи 3.1.8
 
+import Text.Read ( readMaybe, readEither, )
+tryRead :: (Read a, Monad m)=> String -> ExceptT ReadError m a
+tryRead "" = throwE EmptyInput
+tryRead s = parse `catchE` errHandler where
+  parse = except (readEither s)
+  errHandler _ = throwE (NoParse s)
+
+-- alternatives
+
+tryRead s | null s = throwE EmptyInput
+          | otherwise = case reads s of
+            (x, []): _ -> return x
+            _          -> throwE $ NoParse s
+
+tryRead [] = throwE EmptyInput                                                  
+tryRead s  = maybe (throwE (NoParse s)) return (readMaybe s) 
+
+tryRead "" = throwE  EmptyInput
+tryRead str =
+    let aMaybe = readMaybe str
+    in case aMaybe of
+      (Just a) -> return a
+      Nothing -> throwE (NoParse str)
+
+tryRead "" = throwE EmptyInput
+tryRead x = (except $ readEither x) `catchE` (\_ -> throwE $ NoParse x)
+
+tryRead str
+  | null str = throwE EmptyInput
+  | otherwise = case reads str of
+      [(n,"")] -> return n
+      _        -> throwE $ NoParse str
+
 ```
 test
 
+### 4.3.13 test
+
 ```hs
-https://stepik.org/lesson/38580/step/13?unit=20505
-TODO
 {--
 С деревом мы недавно встречались:
 
 data Tree a = Leaf a | Fork (Tree a) a (Tree a)
 
-Вам на вход дано дерево, содержащее целые числа, записанные в виде строк. 
-Ваша задача обойти дерево `in-order` (левое поддерево, вершина, правое поддерево) и просуммировать числа до первой строки, 
+Вам на вход дано дерево, содержащее целые числа, записанные в виде строк.
+Ваша задача обойти дерево `in-order` (левое поддерево, вершина, правое поддерево) и
+просуммировать числа до первой строки, 
 которую не удаётся разобрать функцией `tryRead` из прошлого задания (или до конца дерева, если ошибок нет). 
 Если ошибка произошла, её тоже надо вернуть.
 
@@ -2075,6 +2215,17 @@ go = undefined
 
 -- solution
 -- это продолжение задачек на дерево, ранее реализованное на сервере уже есть, повторно копипастить не надо
+
+go :: String -> ExceptT ReadError (Writer (Sum Integer)) () -- (sum-int, either-err/unit)
+go s = do
+  n <- tryRead s -- :: TE.ExceptT ReadError (TW.Writer (Sum Integer)) Integer
+  lift $ tell (Sum n)
+
+-- alternatives
+
+go s = tryRead s >>= lift . tell . Sum
+go s = (lift . tell . Sum ) =<< tryRead s
+go = tryRead >=> (lift . tell . Sum)
 
 ```
 test

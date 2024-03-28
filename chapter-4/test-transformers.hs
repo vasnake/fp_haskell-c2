@@ -26,8 +26,11 @@
 module TestTransformers where
 
 import Text.Parsec ( getParserState )
-import Data.Char ( toLower, toUpper )
+import Text.Read ( readMaybe, readEither, )
+import Data.Char ( toLower, toUpper, isNumber, isPunctuation, )
 import Data.Function ( (&) )
+import Data.Either ( lefts, isLeft, )
+import Data.Bool
 
 import Data.Monoid (
     Sum(..), Product(..), Endo(..), appEndo, (<>), Dual(..), First(..)
@@ -51,6 +54,8 @@ import Data.Traversable (
     )
 
 import Control.Monad ( liftM, mplus, guard, mfilter, ap, guard, MonadPlus(..), when, MonadFail )
+import Control.Monad.Trans ( MonadTrans(..), MonadIO(..), )
+-- import Control.Monad.IO.Class (liftIO)
 -- import Control.Monad.Cont ( callCC )
 -- import Control.Monad (liftM, ap, MonadPlus(..), guard, msum)
 -- import Control.Applicative (Alternative(..))
@@ -61,9 +66,11 @@ import qualified Control.Monad.Trans.Writer as TW
 import qualified Control.Monad.Trans.Reader as TR
 import qualified Control.Monad.Trans.Except as TE
 import qualified Control.Monad.Trans.State as TS
+import qualified Control.Monad.Trans.Maybe as TM
 -- import Control.Monad.Trans.Writer ( runWriter, tell, Writer )
 -- import Control.Monad.Trans.Reader as TR hiding (reader, Reader, ReaderT, runReader, runReaderT )
 -- import Control.Monad.Trans.Reader as TR ( asks) -- ( ask, asks, Reader(..), ReaderT(..) )
+import qualified Control.Monad.Except as E
 
 -- import GHC.Show (Show)
 -- import GHC.Base (Eq)
@@ -73,7 +80,8 @@ import Prelude (
     foldr, foldl, Either(..), Monoid(..), Semigroup(..), putStrLn, print, (*), (>), (/), (^),
     map, (=<<), (>>=), return, flip, (++), fail, Ord(..), (>>), take, Monad(..),
     Double, either, Integer, head, tail, IO(..), snd, pi, fromIntegral,
-    repeat, fst, snd, (&&), filter, Bool(..),
+    repeat, fst, snd, (&&), filter, Bool(..), replicate, concatMap, getLine, any, all,
+    Read(..),
     )
 
 import Debug.Trace ( trace, )
@@ -228,7 +236,7 @@ instance (Monad m) => Monad (ExceptT e m) where
     case a of
       Left e -> return (Left e) -- запакуем обратно в монаду
       Right x -> runExceptT (k x) -- аналогично, но наоборот, распакуем в монаду (k x :: ExceptT)
-    
+
 --   fail = ExceptT . fail -- делегируем обработку ошибок во внутренний слой, монаду
 
 instance MonadTrans (ExceptT e) where
@@ -323,7 +331,7 @@ instance Functor (StrictWriter w) where
 
 instance (Monoid w)=> Applicative (StrictWriter w) where
   pure x  = StrictWriter (x, mempty)
-  
+
   f <*> v = StrictWriter $ updater (runStrictWriter f) (runStrictWriter v)
     where updater (g, w) (x, w') = (g x, w `mappend` w')
 
@@ -335,7 +343,7 @@ instance Functor (LazyWriter w) where
 
 instance (Monoid w)=> Applicative (LazyWriter w) where
   pure x  = LazyWriter (x, mempty)
-  
+
   f <*> v = LazyWriter $ updater (runLazyWriter f) (runLazyWriter v)
     where updater ~(g, w) ~(x, w') = (g x, w `mappend` w')
 
@@ -463,7 +471,7 @@ data Logged a = Logged String a deriving (Eq, Show)
 newtype LoggT m a = LoggT { runLoggT :: m (Logged a) }
 
 logTst :: LoggT Identity Integer
-logTst = do 
+logTst = do
   x <- LoggT $ Identity $ Logged "AAA" 30 -- (30, "AAA"), x = 30
   y <- return 10                          -- (10, ""), y = 10
   z <- LoggT $ Identity $ Logged "BBB" 2  -- (2, "BBB"), z = 2
@@ -538,14 +546,14 @@ runLogg = runIdentity . runLoggT -- runLogg (LoggT m) = runIdentity m
 
 -- end of solution
 
-logTst' :: Logg Integer   
-logTst' = do 
+logTst' :: Logg Integer
+logTst' = do
   write2log "AAA"
   write2log "BBB"
   return 42
 
 stLog :: StateT Integer Logg Integer
-stLog = do 
+stLog = do
   modify (+1)
   a <- get
   lift $ write2log $ show $ a * 10
@@ -595,7 +603,7 @@ instance MonadTrans LoggT where
 
 -- import qualified Control.Monad.Trans.State as TS
 logSt :: LoggT (TS.State Integer) Integer
-logSt = do 
+logSt = do
   lift $ TS.modify (+1)
   a <- lift TS.get
   write2log $ show $ a * 10
@@ -711,7 +719,7 @@ state :: Monad m => (s -> (a, s)) -> StateT s m a
 state f = StateT (return . f)
 
 execStateT :: Monad m => StateT s m a -> s -> m s
-execStateT m = fmap snd . runStateT m 
+execStateT m = fmap snd . runStateT m
 
 evalStateT :: Monad m => StateT s m a -> s -> m a
 evalStateT m = fmap fst . runStateT m
@@ -914,6 +922,7 @@ GHCi> waysToDie Poisoned map1 4 (4,2)
 Подсказка: не забывайте, в каком уроке эта задача.
 --}
 
+{--
 -- сколько путей умереть данным способом, сделав заданное число шагов из заданной точки.
 waysToDie :: DeathReason -> GameMap -> Int -> Point -> Int
 waysToDie death gmap steps startP = length selected where
@@ -935,15 +944,15 @@ moves_ _ 0 eps = eps -- eps: list of Ether (err) Point
 moves_ gmap steps (ep:eps) = oneStep ++ rest where
   rest = moves_ gmap steps eps
   oneStep = case ep of
-    Left e -> [ep]
+    Left _ -> [ep]
     Right p -> moves_ gmap (steps-1) next4 where
       next4 = (gamePoint gmap) <$> (fourWays p)
 
 fourWays (x, y) = [p1, p2, p3, p4] where
-  p1 = (x+1, y)
-  p2 = (x-1, y)
-  p3 = (x, y+1)
-  p4 = (x, y-1)
+  p1 = (x+1,  y)
+  p2 = (x-1,  y)
+  p3 = (x,    y+1)
+  p4 = (x,    y-1)
 
 gamePoint :: GameMap -> Point -> Either DeathReason Point
 gamePoint g p = case g p of
@@ -951,7 +960,6 @@ gamePoint g p = case g p of
   Chasm -> Left Fallen
   Snake -> Left Poisoned
 
-{--
 Есть кол-во шагов,
 На каждом шаге текущая точка меняет х или у на 1 или -1, т.е. 4 варианта новой точки на каждом шаге,
 Умерев на точке пэ, дальше из этой точки не двигаемся,
@@ -961,6 +969,26 @@ gamePoint g p = case g p of
 > move должна возвращать только исходы, то есть на какой клетке вы остановитесь после последнего хода
 ключевое слово "исходов"
 --}
+
+-- throwE' = ExceptT . return . Left
+
+moves :: GameMap -> Int -> Point -> [Either DeathReason Point]
+moves m n = runExceptT . (moves' m n)
+-- вычисление трансформера иксептТ (список изеров), простая рекурсия
+moves' :: GameMap -> Int -> Point -> ExceptT DeathReason [] Point
+moves' m n p = case m p of -- тре кейса, три конструктора иксептТ
+    Chasm -> throwE Fallen
+    Snake -> throwE Poisoned
+    Floor -> if n == 0 then return p
+      else ExceptT ( -- конструктор желаемого трансформера, внутри рекурсивный вызов
+        moves m (n - 1) `concatMap` nexts p
+      ) -- маппит функцию point -> [either] на список 4 точек
+
+nexts :: Point -> [Point]
+nexts (x, y) = [(x - 1, y), (x, y - 1), (x + 1, y), (x, y + 1)]
+
+waysToDie :: DeathReason -> GameMap -> Int -> Point -> Int
+waysToDie d m n = length . filter (== Left d) . moves m n
 
 -- end of solution
 
@@ -985,7 +1013,7 @@ test21 = waysToDie Poisoned map1 3 (4,2) -- 5  -- за три шага к лев
 test20 = waysToDie Poisoned map1 4 (4,2) -- 13
 
 {--
-wrong:
+wrong, возвращает промежуточные точки маршрутов:
 moves gmap steps (x, y) = list where
   list = (moves_ gmap steps p1) 
       ++ (moves_ gmap steps p2) 
@@ -1012,3 +1040,200 @@ moves_ gmap steps p = case gamePoint gmap p of
       p4 = (x, y-1)
 
 --}
+
+
+{--
+Следующий код
+
+import Control.Monad.Trans.Maybe
+import Data.Char (isNumber, isPunctuation)
+
+askPassword0 :: MaybeT IO ()
+askPassword0 = do
+  liftIO $ putStrLn "Enter your new password:"
+  value <- msum $ repeat getValidPassword0
+  liftIO $ putStrLn "Storing in database..."
+
+getValidPassword0 :: MaybeT IO String
+getValidPassword0 = do
+  s <- liftIO getLine
+  guard (isValid0 s)
+  return s
+
+isValid0 :: String -> Bool
+isValid0 s = length s >= 8
+            && any isNumber s
+            && any isPunctuation s
+
+используя трансформер `MaybeT` и свойства функции `msum`,
+отвергает ввод пользовательского пароля, до тех пор пока он не станет удовлетворять заданным критериям.
+
+Это можно проверить, вызывая его в интерпретаторе
+GHCi> runMaybeT askPassword0
+
+Используя пользовательский тип ошибки и трансформер `ExceptT` вместо `MaybeT`,
+модифицируйте приведенный выше код так, чтобы он
+выдавал пользователю сообщение о причине, по которой пароль отвергнут.
+
+data PwdError = PwdError String
+type PwdErrorIOMonad = ExceptT PwdError IO
+
+askPassword :: PwdErrorIOMonad ()
+askPassword = do
+  liftIO $ putStrLn "Enter your new password:"
+  value <- msum $ repeat getValidPassword
+  liftIO $ putStrLn "Storing in database..."
+
+getValidPassword :: PwdErrorIOMonad String
+getValidPassword = undefined
+
+Ожидаемое поведение:
+
+GHCi> runExceptT askPassword
+Enter your new password:
+qwerty
+Incorrect input: password is too short!
+qwertyuiop
+Incorrect input: password must contain some digits!
+qwertyuiop123
+Incorrect input: password must contain some punctuation!
+qwertyuiop123!!!
+Storing in database...
+GHCi>
+--}
+
+-- import Control.Monad.Trans.Except
+-- import Control.Monad.IO.Class (liftIO)
+-- import Data.Foldable (msum)
+-- import Data.Char (isNumber, isPunctuation)
+
+getValidPassword :: PwdErrorIOMonad String -- TE.ExceptT PwdError IO String -- PwdError = String
+-- т.е. имеем ио монаду в которой изер из ошибка=строка, значение=строка
+getValidPassword = do
+  s <- liftIO getLine
+  let errOrpass = check s
+  when (isLeft errOrpass) (runError errOrpass)
+  return s
+
+-- runError :: (MonadIO m)=> Either PwdError a -> TE.ExceptT PwdError m b
+runError (Right _) = undefined
+runError (Left (PwdError msg)) = do
+  liftIO (putStrLn $ "Incorrect input: " ++ msg)
+  TE.throwE (PwdError msg)
+
+-- check :: String -> Either PwdError String
+check s
+  | length s < 8              = Left $ PwdError "password is too short!"
+  | not (any isNumber s)      = Left $ PwdError "password must contain some digits!"
+  | not (any isPunctuation s) = Left $ PwdError "password must contain some punctuation!"
+  | otherwise                 = Right s
+
+instance Semigroup PwdError where (PwdError x) <> (PwdError y) = PwdError $ x <> y
+instance Monoid PwdError where mempty = PwdError mempty
+
+{--
+class Semigroup a where
+  (<>) :: a -> a -> a
+--}
+
+-- end of solution
+
+newtype PwdError = PwdError String
+type PwdErrorIOMonad = TE.ExceptT PwdError IO
+
+askPassword :: PwdErrorIOMonad ()
+askPassword = do
+  liftIO $ putStrLn "Enter your new password:"
+  value <- msum $ repeat getValidPassword
+  liftIO $ putStrLn "Storing in database..."
+
+-- test25 = runExceptT askPassword
+{--
+Enter your new password:
+qwerty
+Incorrect input: password is too short!
+qwertyuiop
+Incorrect input: password must contain some digits!
+qwertyuiop123
+Incorrect input: password must contain some punctuation!
+qwertyuiop123!!!
+Storing in database... 
+--}
+
+
+{--
+Вспомним функцию `tryRead`:
+
+data ReadError = EmptyInput | NoParse String
+  deriving Show
+
+tryRead :: Read a => String -> Except ReadError a
+
+Измените её так, чтобы она работала в трансформере `ExceptT`
+--}
+-- import Text.Read ( readMaybe, readEither, )
+tryRead :: (Read a, Monad m)=> String -> TE.ExceptT ReadError m a
+tryRead "" = TE.throwE EmptyInput
+tryRead s = parse `TE.catchE` errHandler where
+  parse = TE.except (readEither s)
+  errHandler _ = TE.throwE (NoParse s)
+
+{--
+tryRead :: Read a => String -> Except ReadError a
+tryRead "" = throwE EmptyInput
+tryRead x = (except $ readEither x) `catchE` (\_ -> throwE $ NoParse x)
+
+--}
+
+-- end of solution
+
+data ReadError = EmptyInput | NoParse String deriving Show
+
+
+{--
+С деревом мы недавно встречались:
+
+data Tree a = Leaf a | Fork (Tree a) a (Tree a)
+
+Вам на вход дано дерево, содержащее целые числа, записанные в виде строк.
+Ваша задача обойти дерево `in-order` (левое поддерево, вершина, правое поддерево) и
+просуммировать числа до первой строки, 
+которую не удаётся разобрать функцией `tryRead` из прошлого задания (или до конца дерева, если ошибок нет). 
+Если ошибка произошла, её тоже надо вернуть.
+
+Обходить деревья мы уже умеем, так что от вас требуется только функция `go`, подходящая для такого вызова:
+
+treeSum t = let (err, s) = runWriter . runExceptT $ traverse_ go t
+            in (maybeErr err, getSum s)
+  where
+    maybeErr :: Either ReadError () -> Maybe ReadError
+    maybeErr = either Just (const Nothing)
+
+GHCi> treeSum $ Fork (Fork (Leaf "1") "2" (Leaf "oops")) "15" (Leaf "16")
+(Just (NoParse "oops"),3)
+GHCi> treeSum $ Fork (Fork (Leaf "1") "2" (Leaf "0")) "15" (Leaf "16")
+(Nothing,34)
+--}
+-- data Tree a = Leaf a | Fork (Tree a) a (Tree a)
+-- data ReadError = EmptyInput | NoParse String deriving Show
+go2 :: String -> TE.ExceptT ReadError (TW.Writer (Sum Integer)) () -- (sum-int, either-err/unit)
+go2 s = do
+  n <- tryRead s -- :: TE.ExceptT ReadError (TW.Writer (Sum Integer)) Integer
+  lift $ TW.tell (Sum n)
+
+{--
+tryRead :: (Read a, Monad m)=> String -> TE.ExceptT ReadError m a
+tryRead "" = throwE EmptyInput
+tryRead x = (except $ readEither x) `catchE` (\_ -> throwE $ NoParse x)
+--}
+
+-- end of solution
+
+treeSum t = let (err, sum) = TW.runWriter . TE.runExceptT $ traverse_ go2 t
+            in (maybeErr err, getSum sum)
+  where
+    maybeErr :: Either ReadError () -> Maybe ReadError
+    maybeErr = either Just (const Nothing)
+
+test25 = treeSum $ Fork (Fork (Leaf "1") "2" (Leaf "oops")) "15" (Leaf "16") -- (Just (NoParse "oops"),3)
+test24 = treeSum $ Fork (Fork (Leaf "1") "2" (Leaf "0")) "15" (Leaf "16") -- (Nothing,34)
