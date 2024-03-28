@@ -1,5 +1,6 @@
-{-# LANGUAGE InstanceSigs #-} -- позволяет писать сигнатуры для инстансов
 {-# LANGUAGE FunctionalDependencies #-}
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE InstanceSigs #-} -- позволяет писать сигнатуры для инстансов
 -- {-# LANGUAGE TypeOperators #-} -- для разрешения `|.|` в качестве имени оператора над типами
 -- {-# LANGUAGE PolyKinds #-}
 -- {-# LANGUAGE MultiParamTypeClasses #-}
@@ -81,7 +82,7 @@ import Prelude (
     map, (=<<), (>>=), return, flip, (++), fail, Ord(..), (>>), take, Monad(..),
     Double, either, Integer, head, tail, IO(..), snd, pi, fromIntegral,
     repeat, fst, snd, (&&), filter, Bool(..), replicate, concatMap, getLine, any, all,
-    Read(..),
+    Read(..), Integral(..),
     )
 
 import Debug.Trace ( trace, )
@@ -1237,3 +1238,34 @@ treeSum t = let (err, sum) = TW.runWriter . TE.runExceptT $ traverse_ go2 t
 
 test25 = treeSum $ Fork (Fork (Leaf "1") "2" (Leaf "oops")) "15" (Leaf "16") -- (Just (NoParse "oops"),3)
 test24 = treeSum $ Fork (Fork (Leaf "1") "2" (Leaf "0")) "15" (Leaf "16") -- (Nothing,34)
+
+{--
+Предположим мы хотим реализовать следующую облегченную версию функтора,
+используя многопараметрические классы типов:
+
+class Functor' c e where
+  fmap' :: (e -> e) -> c -> c
+
+Добавьте в определение этого класса типов необходимые функциональные зависимости
+и реализуйте его представителей для списка и `Maybe` так,
+чтобы обеспечить работоспособность следующих вызовов
+
+GHCi> fmap' succ "ABC"
+"BCD"
+GHCi> fmap' (^2) (Just 42)
+Just 1764
+--}
+{-# LANGUAGE FunctionalDependencies #-}
+{-# LANGUAGE FlexibleInstances #-}
+class Functor' c e | c -> e where fmap' :: (e -> e) -> c -> c
+instance (Eq a)=> Functor' [a] a where fmap' = fmap
+instance (Num a, Eq a)=> Functor' (Maybe a) a where fmap' = fmap
+
+-- end of solution
+
+-- test27 :: String
+test27 = fmap' succ "ABC" -- "BCD"
+
+-- test26 :: Maybe Integer
+test26 = fmap' (^2) (Just 42) -- Just 1764
+test28 = take 5 (fmap' (^ 2) [2, 3 .. ])

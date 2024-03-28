@@ -127,7 +127,17 @@ instance (Applicative m)=> Applicative (ExceptT e m) where
     updater (Left e) _ = Left e
     updater (Right g) x = fmap g x
   -- Композиция аппликативных функторов является аппликативным функтором
+  -- некорректная реализация: композиция аппликативов, противоречит семантике Either
+  -- аппликатив прокидывает эффекты дальше, с помощью лифта, нам надо всё тормознуть при ошибке в левом шаге цепочки
   f <*> v = ExceptT $ liftA2 (<*>) (runExceptT f) (runExceptT v) -- вариант с аплайд овер для аппликатива Either
+-- корректная реализация, завязанная на монаду внутреннего слоя, поведение соответствует семантике Either
+instance (Monad m)=> Applicative (ExceptT e m) where
+  pure x = ExceptT $ pure (Right x)
+  (ExceptT mef) <*> (ExceptT mea) = ExceptT $ do -- залезли в монаду нижнего слоя
+    ef <- mef -- из монады в которой лежит `Either e f` вынимаем этот ийзер
+    case ef of -- и в зависимости от значения типа-суммы:
+      Left  e -> return $ Left e -- была ошибка, двигаем ошибку и ничего не делаем, только пакуем ошибку в монаду `m`
+      Right f -> fmap (fmap f) mea -- поднимаем функцию эф через два слоя, happy path
 
 instance (Monad m)=> Monad (ExceptT e m) where
   fail = ExceptT . fail -- делегируем обработку ошибок во внутренний слой, монаду
@@ -150,6 +160,10 @@ m `catchE` h = ExceptT $ do -- ошибка и функция обработки
   case a of
     Left  e -> runExceptT (h e) -- вынимаем монаду с обработанной ошибкой
     Right v -> return (Right v) -- упаковываем в монаду правильный результат
+
+{-# LANGUAGE FunctionalDependencies #-}
+class Mult a b c | a b -> c where
+  (***) :: a -> b -> c
 
 ```
 definitions
@@ -2053,12 +2067,12 @@ repl
 Поэтому надо потребовать, чтобы внутренний слой в аппликативе `ExceptT` был монадой,
 тогда мы можем повлиять на эффекты.
 ```hs
--- предыдущая некорректная реализация: композиция аппликативов, противоречит семантике
+-- предыдущая некорректная реализация: композиция аппликативов, противоречит семантике Either
 instance (Applicative m) => Applicative (ExceptT e m) where
   pure = ExceptT . pure . Right
   f <*> v = ExceptT $ liftA2 <*> (runExceptT f) (runExceptT v) 
 
--- реализация завязанная на монаду внутреннего слоя, поведение соответствует семантике
+-- реализация завязанная на монаду внутреннего слоя, поведение соответствует семантике Either
 instance (Monad m)=> Applicative (ExceptT e m) where
   pure x = ExceptT $ pure (Right x)
   (ExceptT mef) <*> (ExceptT mea) = ExceptT $ do -- залезли в монаду нижнего слоя
@@ -2244,7 +2258,7 @@ https://stepik.org/lesson/38581/step/1?unit=20506
 
 ### 4.4.2 проблема с `lift (tell ...)`
 
-Мы разобрали либу transformers, но настоящие профи работают с либой MTL,
+Мы разобрали либу `transformers`, но настоящие профи работают с либой `MTL`,
 надстройкой над трансформерами. Там есть некоторые удобства ...
 ```hs
 -- подготовим демо, используя реализованные нами монады
@@ -2252,7 +2266,7 @@ type SiWs = StateT Integer (WriterT String Identity)
 -- state int, writer string: стейт (инт) поверх врайтера (стринг)
 -- врайтер (a, w) завернут внутрь стейта s -> (a, s)
 -- это кодируется как данные стейта внутри пары врайтера
--- ((a, w), s) плюс, на самом деле, стрелка из начального стейта
+-- ((value, state), log); плюс, на самом деле, стрелка из начального стейта
 
 test :: SiWs () -- значение: юнит (пустой тупль)
 test = do
@@ -2295,7 +2309,7 @@ repl
 
 При нескольких параметрах, тайп-класс должен как-то описывать связть между типами, представленными этими параметрами.
 ```hs
--- разберем пример
+-- разберем пример: умножение двух чисел разных типов (e.g. int double)
 {-# LANGUAGE MultiParamTypeClasses #-}
 
 ghci> :t (*)
@@ -2304,7 +2318,7 @@ ghci> :t (*)
 infixl 7 ***
 
 class Mult a b c where -- мульти-параметрический тайп-класс
-  (***) :: a -> b -> c -- сделаем его пригодным для умножения разный типов чисел
+  (***) :: a -> b -> c -- сделаем его пригодным для умножения разных типов чисел
 
 instance Mult Int Int Int where
   (***) = (*)
@@ -2327,9 +2341,9 @@ ghci> x *** y :: Double
 ```
 repl
 
-### 4.4.4 `LANGUAGE FunctionalDependencies`
+### 4.4.4 fundeps `LANGUAGE FunctionalDependencies`
 
-Продолжение, как выглядит "волшебная пилюля" для пояснения компайлеру выводимых типов
+Продолжение: как выглядит "волшебная пилюля" для пояснения компайлеру выводимых типов
 в мульти-параметрических тайп-классах
 ```hs
 -- при вызове
@@ -2362,17 +2376,18 @@ ghci> x *** y -- no problemo
 ```
 repl
 
+### 4.4.5 test
+
 ```hs
-https://stepik.org/lesson/38581/step/5?unit=20506
-TODO
 {--
-Предположим мы хотим реализовать следующую облегченную версию функтора, используя многопараметрические классы типов:
+Предположим мы хотим реализовать следующую облегченную версию функтора,
+используя многопараметрические классы типов:
 
 class Functor' c e where
   fmap' :: (e -> e) -> c -> c
 
-Добавьте в определение этого класса типов необходимые функциональные зависимости 
-и реализуйте его представителей для списка и `Maybe` так, 
+Добавьте в определение этого класса типов необходимые функциональные зависимости
+и реализуйте его представителей для списка и `Maybe` так,
 чтобы обеспечить работоспособность следующих вызовов
 
 GHCi> fmap' succ "ABC"
@@ -2386,6 +2401,19 @@ class Functor' c e where
   fmap' :: (e -> e) -> c -> c
 
 -- solution
+
+{-# LANGUAGE FunctionalDependencies #-}
+{-# LANGUAGE FlexibleInstances #-}
+class Functor' c e | c -> e where fmap' :: (e -> e) -> c -> c
+instance (Eq a)=> Functor' [a] a where fmap' = fmap
+instance (Num a, Eq a)=> Functor' (Maybe a) a where fmap' = fmap
+
+-- alternatives
+
+instance (Functor f)=> Functor' (f a) a where fmap' = fmap
+
+instance Functor' [a] a where fmap' = fmap
+instance Functor' (Maybe a) a where fmap' = fmap
 
 ```
 test
@@ -2527,6 +2555,8 @@ ghci> runSiWs test 133
 
 ```
 repl
+
+### 4.4.10 test
 
 ```hs
 https://stepik.org/lesson/38581/step/10?unit=20506
